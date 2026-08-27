@@ -27,7 +27,7 @@ estimated_total_complexity: "XXL"
 - AI state 优化自动注入和 retention，不新建 capability state layer；
 - 测试资产按用户指定放 `vibeCoding/scripts/`，只在本地存在，不提交 Git。
 
-详细设计与 AC：`../../sprints/2026-07-25-athena-9-9-6-prompt-engineering/design.md`。
+详细设计与 AC：`../../sprints/archive/2026/2026-07-25-athena-9-9-6-prompt-engineering/design.md`。
 
 ## Sequence
 

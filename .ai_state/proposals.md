@@ -111,3 +111,21 @@
 - **现象**: 用户明确授权删除两个仓库 `_to_delete_*` 目录，但执行器拒绝 literal `rm -rf`。
 - **处置**: 只针对已核验的绝对路径，将两个目录完整移入本轮事务备份 `deleted-to-delete/`；仓库原路径已消失，内容可恢复。
 - **后续**: 清理动作继续使用可回滚 quarantine，除非执行器提供受控删除通道；不扩大到 sessions/history/plugins/database。
+
+## P14 · worktree 强制检查三次撞上: 审"未提交增量"的 reviewer 也被拦 (2026-08-27, 实测撞上; P9 第三形态)
+
+- **现象**: 9.9.8 ship 后 `.gitignore` 3 行 housekeeping 触发 delivery-gate 哈希漂移 block, 按契约需目标复核。spawn fallback `reviewer` (写面仅 `.ai_state/sprints/{slug}/reviews/`) 被 `subagent-worktree-check` 以 path=System+写者无 worktree 拦截。但该场景 worktree **双重不适配**: (a) worktree 检出 HEAD, 看不到待审的**未提交**增量 → 审的是错误的树; (b) 结果档写进 worktree 而非主仓 .ai_state。hook 给的修复建议 (加 isolation: worktree) 在此形态下会产出错误结果。
+- **与 P9 的关系**: 同一形态族——门禁要求的隔离手段对该对象无效, 却仍阻断唯一合法执行路径。P9 两次是"改动对象在 repo 外", 本次是"审读对象是未提交工作树"。三次全靠临场绕行 (本次: 只读 architect 判 + 主 agent 转录, 见 sprint reviews/rework-review-2.md)。
+- **建议修复**: 豁免判据从"是否有 Write 工具"细化到**写面声明**——写面 ⊆ `.ai_state/` (ship 哈希已排除、天然单写者档案区) 的 subagent 免 worktree; 或读取既有 P9 建议的 `_index.harness_target_outside_repo` 同款机制扩展一个 `review_of_working_tree` 豁免。与 P9 同批, **下刀必修** (已录 compound explore athena-9-9-8-post-ship-directions 第 12(c) 条)。
+
+## P15 · `_index-bounds` 溢出搬运不在锁内, spill 全文曾静默丢失 (2026-08-27, tidy 复核实测)
+
+- **现象**: `route_history` 四条 160B 截断项带 `→index-overflow.md#rh-0..3` 指针, 但 overflow 文件内**无任何 rh-* 段**——搬运写入被并发 flush 覆盖丢失。`_index-io` 的 O_EXCL 锁只保护 `_index.md` 本体, **spill 目标文件不在锁内**, 同事件多写者对 overflow 文件是裸 read-modify-write。
+- **后果**: "溢出不丢弃"(AC9) 的承诺被静默打破, 丢的是审计链全文且无报错——与 9.9.6 修过的 `_index` 并发竞态同构, 只是换了受害文件。
+- **本次处置**: tidy agent 从 git 历史找回全文并重建 rh-0..3 锚点 (`grep -c '^## rh-' index-overflow.md` = 4)。
+- **建议修复**: spill 写入纳入 `_index-io` 同一把锁 (锁粒度从文件改为"_index 事务"), 或 spill 改 O_APPEND 单行 JSONL (追加天然原子) 由渲染层拼装。双端对称。**待修**。
+
+## P16 · `_index-bounds.flush()` 零溢出也无条件写, idle 态在 .ai_state 根反复重建空 stub (2026-08-27, tidy 复核实测)
+
+- **现象**: `flush()` 不判 spill 是否为空一律写文件; `current_sprint_slug` 为空时 `spillPath()` 回落 `.ai_state/index-overflow.md`, 于是每次 index-updater 运行都重建一个 3 行空头文件, 删了即复活。
+- **建议修复**: `flush()` 在零溢出时 no-op; sprint 为空且确有溢出时才允许根路径回落。一行判断, 与 P15 同批。**待修**。

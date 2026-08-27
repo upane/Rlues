@@ -57,3 +57,67 @@ older 当前状态 →index-overflow.md#st-0
 
 ### archived-1
 older 当前状态 →index-overflow.md#st-9
+
+## rh-0
+
+2026-07-28 System impl 范围扩张 (非 re-route): 用户拍板把 2026-07-27-hotfix-gate-contract 的 A-E 五条并入本 sprint 作追加范围, 不另立 sprint; path 维持 System (design 原建议 Feature 作废); 改动对象含 ~/.claude 与 ~/.codex 安装态, 依 stages.md 先例不用 worktree
+
+## rh-1
+
+2026-07-28 System impl 红区降级 (用户显式批准): spawn generator 执行 G1-G5 被 subagent-worktree-check.cjs 无条件 block (P9 二次撞上, 无豁免出口); worktree 对 repo 外的 ~/.claude|~/.codex 零隔离却照样阻断写入, 任务结构性死锁。用户批准主 agent 直做 G1-G5, 改安装态前已逐个备份 (12 文件, pre-g1g5-20260728T024943Z)
+
+## rh-2
+
+2026-07-29 System impl: 用户授权 hotfix2 W35-W40 安装态同步、真实 sprint 采数、validator 收口与 main 推送；canonical release 优先于过时 _hf2_sync 快照
+
+## rh-3
+
+2026-08-27 System: Athena 9.9.8 Thin PACE Control Plane；一次原生 review、hook 红黄绿、有界 ai_state；VM/LaaV 仅保留 opt-in 接口；独立 Claude 按 packet 复盘
+
+## st-11
+
+2026-08-27 冷归档：`sprints/` 下 21 个已关闭 sprint 移入 `sprints/archive/2026/`（`git mv`，历史保留；目录内 gitignored 的 `token-usage.yaml` / `tool-trace.jsonl` 共 9 个文件随目录迁移，未删除）。热层只留 `_index.md` + `sprints/2026-08-27-athena-9-9-8`。
+
+归档前 `_index.counts` 的累计值（index-updater 按 AC9「archive 默认排除」重算后会收敛为热层值，故在此留档）：
+`features_count: 5, issues_count: 0, refactors_count: 1, systems_count: 12, requirements_count: 1, reviews_count: 24, cleanup_count: 8`。
+归档后热层实测值：`features 0 / issues 0 / refactors 0 / systems 1 / reviews 6 / cleanup 1`。
+复核命令：`ls -1 .ai_state/sprints/archive/2026 | wc -l`（应为 21）。
+
+## st-12
+
+2026-08-27 迁 9.9.8 schema 时从 `_index.## 当前状态` 挤出的条目 (全文仍在下方各锚点, 未销毁):
+
+### archived-0
+`2026-07-28`: 用户主动关闭 9.9.6 prompt-engineering / gate-descaling 方向 →index-overflow.md#st-5
+
+### archived-1
+`2026-07-28`: **10bd534 gate-descaling 本地 draft 已同步到当前系统端点**：CC 128 / CX 33 / shared skills 97 →index-overflow.md#st-6
+
+### archived-2
+older 当前状态 →index-overflow.md#st-10
+
+## hi-0
+
+`_index.md` 的 `## 历史` 段在 9.9.8 模板中已废除 (W29, 2026-07-28: `pace-continuator.cjs:60-62` 停止写入 —— `_index` 曾并存三套历史, turn-end 条目信息量≈0 且实测产生空条目)。迁移到 9.9.8 schema 时该段整体从 `_index.md` 移除, 原七条 turn-end 记录原样存档于此, 未销毁:
+
+```
+- `2026-07-25 17:56:21`: stage=impl sprint=2026-07-25-athena-9-9-6-prompt-engineering turn-end
+- `2026-07-21 03:21:03`: stage=  sprint=  turn-end
+- `2026-07-21 03:18:58`: stage=  sprint=  turn-end
+- `2026-07-11 12:59:01`: stage=ship sprint=2026-07-10-claude-code-9-9-1-impl turn-end
+- `2026-07-10 13:31:06`: stage=review sprint=2026-07-10-claude-code-9-9-1-impl turn-end
+- `2026-07-07 02:24:00`: stage=plan sprint=2026-07-07-f1-orchestrator-framework-design turn-end
+- `2026-07-07 01:53:39`: stage=  sprint=  turn-end
+```
+
+其中三条 `stage=  sprint=` 为空条目 (即 W29 记录的实测缺陷)。上述 sprint 现位于 `sprints/archive/2026/` 下。
+
+## rh-restore-note
+
+`rh-0` – `rh-3` 四个锚点在 2026-08-27 之前是**悬空指针**：`_index.route_history` 的摘要行已带 `→index-overflow.md#rh-N` 后缀，但本文件从未落过对应小节（`_index-bounds.cjs` 的 spill 未落盘或被并发 flush 覆盖）。全文于 2026-08-27 从 git 历史复原并补回上方，命令：
+
+```
+git log --all -p -- .ai_state/_index.md | grep -o '2026-07-28 System impl 范围扩张[^"]*'
+```
+
+补回后 `nextId(body,"rh")` 从 4 起编号，后续 spill 不再与既有摘要指针撞号。
