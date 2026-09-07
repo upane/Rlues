@@ -494,7 +494,7 @@ function parseReviewManifest(filePath, pathType) {
 }
 
 const INDEX_GOVERNANCE_FIELDS = [
-  "path", "current_sprint_slug", "skip_polish", "skip_runtime_verify",
+  "version", "path", "current_sprint_slug", "skip_polish", "skip_runtime_verify",
   "skip_architecture_check", "skip_impl_subagent_check",
   "plan_critique_disabled", "plan_critique_min_rounds",
 ];
@@ -1005,6 +1005,8 @@ function isLightShipFile(file) {
   // in-repo trace. Touching it means this sprint changed the gate: run the full contract.
   if (/(^|\/)harness-patches\.md$/.test(file)) return false;
   if (/(^|\/)settings(\.local)?\.json$/.test(file)) return false;
+  if (/(^|\/)config\.toml$/.test(file)) return false;
+  if (/(^|\/)hooks\.json$/.test(file)) return false;
   // Source logic (non-test code) needs review even when small — never light.
   const isTest = /(^|\/)(tests?|__tests__|specs?)\//.test(file) || /\.(test|spec)\.[A-Za-z]+$/.test(file);
   const isCode = /\.(py|ts|tsx|js|jsx|mjs|cjs|go|rs|java|rb|php|c|cc|cpp|h|hpp|swift|kt|scala|sh|bash|zsh|sql)$/.test(file);
@@ -1028,21 +1030,38 @@ function shipChangeIsLight(cwd) {
     }
   }
   if (!base) return false;
-  const stat = gitLines(cwd, ["diff", "--numstat", `${base}..HEAD`]);
-  if (!stat.ok) return false;
   let totalLines = 0;
   const files = [];
-  for (const row of stat.lines) {
-    const cols = row.split("\t");
-    if (cols.length < 3) continue;
-    const file = cols[2];
+  const addNumstat = (stat) => {
+    if (!stat.ok) return false;
+    for (const row of stat.lines) {
+      const cols = row.split("\t");
+      if (cols.length < 3) continue;
+      const file = cols[2];
+      files.push(file);
+      // .ai_state/ is auto-maintained state (token-usage churn, logs, pointers) and does not
+      // count toward the line budget — only toward file eligibility below.
+      if (/(^|\/)\.ai_state\//.test(file)) continue;
+      const added = cols[0] === "-" ? 0 : Number(cols[0]) || 0;
+      const deleted = cols[1] === "-" ? 0 : Number(cols[1]) || 0;
+      totalLines += added + deleted;
+    }
+    return true;
+  };
+  // Light-ship surface is committed-ahead ∪ worktree ∪ untracked. HEAD-only
+  // numstat would classify a docs commit as light while source sits dirty.
+  if (!addNumstat(gitLines(cwd, ["diff", "--numstat", `${base}..HEAD`]))) return false;
+  if (!addNumstat(gitLines(cwd, ["diff", "--numstat", "HEAD"]))) return false;
+  const untracked = gitLines(cwd, ["ls-files", "-o", "--exclude-standard"]);
+  if (!untracked.ok) return false;
+  for (const file of untracked.lines) {
     files.push(file);
-    // .ai_state/ is auto-maintained state (token-usage churn, logs, pointers) and does not
-    // count toward the line budget — only toward file eligibility below.
     if (/(^|\/)\.ai_state\//.test(file)) continue;
-    const added = cols[0] === "-" ? 0 : Number(cols[0]) || 0;
-    const deleted = cols[1] === "-" ? 0 : Number(cols[1]) || 0;
-    totalLines += added + deleted;
+    try {
+      totalLines += fs.readFileSync(path.join(cwd, file), "utf8").split(/\r?\n/).length;
+    } catch (_) {
+      totalLines += 1;
+    }
   }
   if (files.length === 0) return false;
   if (totalLines > SHIP_LIGHT_MAX_LINES) return false;
@@ -1334,5 +1353,5 @@ function main() {
 if (require.main === module) {
   main();
 } else {
-  module.exports = { sourceDiffSha256, fileSha256, extractAcIds, parseDocFrontmatter, validateReviewPacket, acceptanceCriteria, validateReview, validateEvidence, GateError };
+  module.exports = { sourceDiffSha256, fileSha256, extractAcIds, parseDocFrontmatter, validateReviewPacket, acceptanceCriteria, validateReview, validateEvidence, GateError, shipChangeIsLight, isLightShipFile };
 }

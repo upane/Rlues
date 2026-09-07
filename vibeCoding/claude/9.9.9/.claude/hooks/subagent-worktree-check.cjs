@@ -113,6 +113,12 @@ function main() {
     }
 
     const { fm: agentFm } = parseFrontmatter(fs.readFileSync(agentFile, 'utf-8'));
+    if (['polish-worker', 'polish_worker'].includes(subagentType)) {
+      process.stderr.write(
+        '[subagent-worktree-check] polish-worker reuses the impl worktree; nested isolation skipped\n'
+      );
+      process.exit(0);
+    }
     const hasWorktreeIsolation = payload?.tool_input?.isolation === 'worktree' || agentFm.isolation === 'worktree';
     const writesFiles = subagentWritesFiles(agentFm);
 

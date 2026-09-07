@@ -40,7 +40,48 @@ GIT_OPTS_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "-
 
 
 def strip_comments(command: str) -> str:
-    return re.sub(r"(?m)(?<!\$)#(?![{(]).*$", "", command)
+    quote = ""
+    escaped = False
+    result = []
+    at_word_start = True
+    i = 0
+    while i < len(command):
+        ch = command[i]
+        if escaped:
+            result.append(ch)
+            escaped = False
+            at_word_start = False
+            i += 1
+            continue
+        if ch == "\\" and quote != "'":
+            result.append(ch)
+            escaped = True
+            i += 1
+            continue
+        if quote:
+            result.append(ch)
+            if ch == quote:
+                quote = ""
+            i += 1
+            continue
+        if ch in "'\"":
+            quote = ch
+            result.append(ch)
+            at_word_start = False
+            i += 1
+            continue
+        if ch == "#" and at_word_start:
+            eol = command.find("\n", i)
+            if eol < 0:
+                break
+            result.append("\n")
+            i = eol + 1
+            at_word_start = True
+            continue
+        result.append(ch)
+        at_word_start = bool(re.match(r"\s", ch))
+        i += 1
+    return "".join(result)
 
 
 def find_substitutions(command: str) -> list[str | None]:
@@ -125,8 +166,11 @@ def dangerous_target(value: str) -> bool:
 
 
 def has_recursive_force(args: list[str]) -> bool:
-    flags = "".join(a for a in args if a.startswith("-") and not a.startswith("--"))
-    return "r" in flags.lower() and "f" in flags
+    tokens = {a.strip("'\"") for a in args}
+    if "--recursive" in tokens and "--force" in tokens:
+        return True
+    flags = "".join(a[1:] for a in args if a.startswith("-") and not a.startswith("--"))
+    return "r" in flags.lower() and "f" in flags.lower()
 
 
 def split_segments(command: str) -> list[tuple[str, str]]:
@@ -197,7 +241,26 @@ def analyze(command: str, depth: int = 0) -> dict[str, Any]:
         parsed.append((env, name, args, sep))
 
     for env, name, args, _sep in parsed:
+        name = name.lstrip("\\")
         vals = [a.strip("'\"") for a in args]
+        unwrap_depth = 0
+        while unwrap_depth < 3 and name in {"sudo", "env", "command"} and vals:
+            unwrap_depth += 1
+            if name == "command":
+                while vals and vals[0].startswith("-"):
+                    vals.pop(0)
+            elif name == "env":
+                while vals and (vals[0].startswith("-") or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", vals[0])):
+                    vals.pop(0)
+            elif name == "sudo":
+                options_with_value = {"-u", "-g", "-h", "-p", "-C", "-T"}
+                while vals and vals[0].startswith("-"):
+                    option = vals.pop(0)
+                    if option in options_with_value and vals:
+                        vals.pop(0)
+            if not vals:
+                break
+            name = Path(vals.pop(0)).name.lstrip("\\")
         if name in {"eval", "xargs"} and vals:
             nested = analyze(" ".join(vals), depth + 1)
             if nested.get("danger") or nested.get("push"):
@@ -213,7 +276,7 @@ def analyze(command: str, depth: int = 0) -> dict[str, Any]:
             idx = vals.index("-c")
             if idx + 1 < len(vals):
                 nested = analyze(vals[idx + 1], depth + 1)
-                if nested.get("danger"):
+                if nested.get("danger") or nested.get("push"):
                     return nested
         if re.match(r"^:\s*\(\s*\)", " ".join([name] + vals)) or re.search(r":\(\)\s*\{", active):
             return {"danger": "fork bomb"}
@@ -290,8 +353,8 @@ def main() -> int:
             sys.stderr.write(f"[evidence-input] unavailable: {exc}\n")
         return EXIT_SUCCESS
     except Exception as exc:
-        sys.stderr.write(f"[pre-bash-guard] non-blocking error: {exc}\n")
-        return EXIT_SUCCESS
+        sys.stderr.write(f"[pre-bash-guard] BLOCKED: parser failure: {exc}\n")
+        return EXIT_BLOCK
 
 
 if __name__ == "__main__":

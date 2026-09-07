@@ -4,7 +4,35 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const owned = new Map();
+const LOCK_STALE_MS = 10000;
 const lockPath = p => p + '.lock';
+function legacyLockBlocks(idx) {
+  const lp = lockPath(idx);
+  try {
+    const st = fs.statSync(lp);
+    let pid = null;
+    try {
+      const data = JSON.parse(fs.readFileSync(lp, 'utf8'));
+      if (data && Number.isInteger(data.pid)) pid = data.pid;
+    } catch (_) { /* 9.9.8 locks are empty; fall through to mtime. */ }
+    if (pid != null) {
+      try { process.kill(pid, 0); return true; }
+      catch (e) {
+        if (e.code !== 'ESRCH') throw e;
+        fs.unlinkSync(lp);
+        return false;
+      }
+    }
+    if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
+      fs.unlinkSync(lp);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    if (e.code === 'ENOENT') return false;
+    throw e;
+  }
+}
 function contenders(idx) {
   const directory=path.dirname(idx), prefix=path.basename(idx)+'.lock.', result=[];
   for (const name of fs.readdirSync(directory)) {
@@ -28,7 +56,7 @@ function acquire(idx) {
     const numbers=contenders(idx).map(v=>v[1]).filter(Number.isInteger), ticket=Math.max(0,...numbers)+1;
     writeAtomic(contender,JSON.stringify({pid:process.pid,ticket}));
     for (;;) {
-      let blocked=fs.existsSync(lockPath(idx));
+      let blocked=legacyLockBlocks(idx);
       for(const [file,number,other] of contenders(idx)) {
         if(file===contender) continue;
         if(number==null || number<ticket || (number===ticket && other<token)) blocked=true;

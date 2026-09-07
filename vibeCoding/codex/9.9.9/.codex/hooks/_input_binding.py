@@ -9,6 +9,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 from _index_io import write_atomic
 
@@ -31,14 +32,13 @@ def canonical(value) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
 def required(sprint: Path) -> bool:
-    """Only the active 9.9.9+ sprint is upgraded, never historical reviews."""
+    """Binding is on because these 9.9.9 hooks are installed, not because _index.version says so."""
     index = sprint.parents[1]/'_index.md'
     if not index.is_file():
         return False
     text = index.read_text()
-    version = re.search(r'^version:\s*["\']?(\d+)\.(\d+)\.(\d+)',text,re.M)
     slug = re.search(r'^current_sprint_slug:\s*["\']?([A-Za-z0-9][A-Za-z0-9._-]*)',text,re.M)
-    return bool(version and slug and tuple(map(int,version.groups())) >= (9,9,9) and slug.group(1) == sprint.name)
+    return bool(slug and slug.group(1) == sprint.name)
 
 def digest(data: bytes | str) -> str:
     return hashlib.sha256(data.encode() if isinstance(data, str) else data).hexdigest()
@@ -74,6 +74,9 @@ def source_sha256(root: Path) -> str:
             h.update(b'deleted')
         elif target.is_file():
             h.update((b'executable\0' if target.stat().st_mode & 0o111 else b'file\0') + target.read_bytes())
+        elif target.is_dir():
+            sys.stderr.write('[input-binding] skip gitlink/submodule: '+name+'\n')
+            h.update(b'gitlink\0')
         else:
             raise ValueError('unsupported source directory/submodule: ' + name)
         h.update(b'\n')

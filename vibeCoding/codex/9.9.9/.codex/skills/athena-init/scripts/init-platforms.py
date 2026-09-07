@@ -36,7 +36,7 @@ def normalize(value):
 
 def replace_field(text, name, value):
     line = name + ': ' + json.dumps(value, ensure_ascii=False)
-    pattern = r'^' + re.escape(name) + r':[^\n]*$'
+    pattern = r'^' + re.escape(name) + r':[^\n]*$(?:\n[ \t]+-[^\n]*)*'
     if re.search(pattern, text, re.M):
         return re.sub(pattern, lambda match: line, text, count=1, flags=re.M)
     return line + '\n' + text
@@ -54,7 +54,13 @@ def intent(text):
         return None
     _, body, _ = frontmatter(text)
     match = re.search(r'^platforms_enabled:\s*(\[[^\n]*?\])', body, re.M)
-    return normalize(json.loads(match.group(1))) if match else None
+    if match:
+        return normalize(json.loads(match.group(1)))
+    match = re.search(r'^platforms_enabled:\s*(?:#.*)?\n((?:[ \t]+-\s+\S+[^\n]*\n)+)', body, re.M)
+    if not match:
+        return None
+    items = re.findall(r'-\s+(\S+)', match.group(1))
+    return normalize([item.strip().strip('"\'') for item in items])
 
 
 def merge_latest(request, latest):
@@ -82,7 +88,10 @@ def merge_latest(request, latest):
         return match.group(1) + block
     body = re.sub(r'(^platform_features:[^\n]*\n)((?:[ \t]+[^\n]*(?:\n|$)|\n)*)',
                   clear_unobserved, body, flags=re.M)
-    return prefix + body + suffix
+    updated = prefix + body + suffix
+    if intent(updated) != selected:
+        raise ValueError('index write would produce invalid platforms_enabled')
+    return updated
 
 
 def commit_discovery(index, request):

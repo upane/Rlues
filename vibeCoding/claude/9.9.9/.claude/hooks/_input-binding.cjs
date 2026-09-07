@@ -20,12 +20,13 @@ function canonical(value) {
   return JSON.stringify(value);
 }
 function required(sprint) {
+  // 9.9.9 hooks enable binding for the current sprint. Never read project version:
+  // that field is agent-writable and would silently disable AC6/AC7 after migrate.
   const index = path.join(sprint,'../../_index.md');
   if (!fs.existsSync(index)) return false;
-  const text = fs.readFileSync(index,'utf8'), version=text.match(/^version:\s*["']?(\d+)\.(\d+)\.(\d+)/m), slug=text.match(/^current_sprint_slug:\s*["']?([A-Za-z0-9][A-Za-z0-9._-]*)/m);
-  if (!version || !slug || slug[1]!==path.basename(sprint)) return false;
-  const v=version.slice(1).map(Number);
-  return v[0]>9 || (v[0]===9 && (v[1]>9 || (v[1]===9 && v[2]>=9)));
+  const text = fs.readFileSync(index,'utf8');
+  const slug=text.match(/^current_sprint_slug:\s*["']?([A-Za-z0-9][A-Za-z0-9._-]*)/m);
+  return Boolean(slug && slug[1]===path.basename(sprint));
 }
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 function git(root, ...args) { return execFileSync('git', args, {cwd:root, timeout:15000, stdio:['ignore','pipe','pipe']}); }
@@ -49,6 +50,7 @@ function sourceSha256(root) {
     if (!stat) h.update('deleted');
     else if (stat.isSymbolicLink()) h.update('link\0'+fs.readlinkSync(target));
     else if (stat.isFile()) { h.update(stat.mode & 0o111 ? 'executable\0':'file\0'); h.update(fs.readFileSync(target)); }
+    else if (stat.isDirectory()) { process.stderr.write('[input-binding] skip gitlink/submodule: '+name+'\n'); h.update('gitlink\0'); }
     else throw new Error('unsupported source directory/submodule: '+name);
     h.update('\n');
   }

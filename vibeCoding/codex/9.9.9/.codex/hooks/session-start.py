@@ -6,7 +6,7 @@ VibeCoding Athena v9.9.6 · Codex SessionStart hook
 职责:
 1. 注入 _index.md frontmatter 摘要
 2. 注入 ~/.codex/standards/_index.md 摘要 (兼容旧 ~/.agents/standards)
-3. stage-specific 操作提示 (xhigh / critic / spec-compliance)
+3. stage-specific 操作提示 (xhigh / 一次独立 review)
 4. design_changed_after_impl=true 强提示
 5. next_action = roadmap 自动推进提示
 
@@ -171,8 +171,7 @@ def stage_hints(fm: dict) -> list:
         hints.append('   - 出口 reflect: 列"还有哪里没完善" → 回 impl 补 或 next_action=review')
 
     if stage == "review":
-        hints.append("🔎 **review stage**: 原生 spawn_agent 并行分派 reviewer + spec-compliance; 两者只返回 findings.")
-        hints.append("   - 主 thread 合并 pass1.md, 再分派 evaluator 返回最终 VERDICT")
+        hints.append("🔎 **review stage**: 走一次独立 review (原生入口或只读 reviewer).")
         hints.append("   - 所有 .ai_state 写入与 stage 转换由主 thread 执行")
 
     if stage == "polish":
@@ -187,7 +186,7 @@ def special_alerts(fm: dict) -> list:
     alerts = []
 
     if fm.get("design_changed_after_impl", "false").lower() == "true":
-        alerts.append("🚨 **design 改后未重新 review**: ship 前必须重新跑 reviewer + spec-compliance + evaluator. delivery-gate 会 block.")
+        alerts.append("🚨 **design 改后未重新 review**: ship 前必须重新走一次独立 review. delivery-gate 会 block.")
 
     next_action = fm.get("next_action", "")
     if next_action.startswith("next_roadmap_item:"):

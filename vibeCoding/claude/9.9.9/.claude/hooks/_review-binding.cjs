@@ -64,18 +64,45 @@ function fileRefs(root,names) {
   }
   return result;
 }
+function evidenceIds(sprint) {
+  const file = path.join(sprint,'evidence.yaml');
+  if (!fs.existsSync(file)) return [];
+  return [...new Set([...fs.readFileSync(file,'utf8').matchAll(/^\s*-\s+tool_use_id\s*:\s*([^#\n]*)/gm)]
+    .map(match => match[1].trim().replace(/^["']|["']$/g,''))
+    .filter(id => id && !['[]','null','~'].includes(id)))].sort();
+}
 function liveInput(root,sprint,prepared) {
   const inputs = fileRefs(root,prepared.input_paths || []);
   if (prepared.mode==='implementation') Object.assign(inputs,input.snapshot(root,sprint));
   else inputs.design_sha256 = input.digest(fs.readFileSync(path.join(sprint,'design.md')));
   return {base_commit:input.git(root,'rev-parse','HEAD').toString().trim(),packet_sha256:input.digest(fs.readFileSync(path.join(sprint,'review-packet.md'))),
-    input_manifest_sha256:input.digest(input.canonical(inputs)),evidence_refs:fileRefs(root,Object.keys(prepared.evidence_refs || {}))};
+    input_manifest_sha256:input.digest(input.canonical(inputs)),evidence_ids:evidenceIds(sprint),
+    evidence_docs:fileRefs(root,Object.keys(prepared.evidence_docs || {}))};
 }
 function assertLive(root,sprint,prepared) {
   const live = liveInput(root,sprint,prepared);
-  for (const field of ['base_commit','packet_sha256','input_manifest_sha256','evidence_refs']) {
-    if (input.canonical(live[field])!==input.canonical(prepared[field])) throw new Error('review input changed: '+field);
+  // base_commit is recorded, not compared: ship bookkeeping commits must not void a review.
+  if (live.packet_sha256!==prepared.packet_sha256) throw new Error('review input changed: packet_sha256');
+  if (live.input_manifest_sha256!==prepared.input_manifest_sha256) throw new Error('review input changed: input_manifest_sha256');
+  if (input.canonical(live.evidence_docs)!==input.canonical(prepared.evidence_docs || {})) throw new Error('review input changed: evidence_docs');
+  const preparedIds = prepared.evidence_ids || [];
+  if (!preparedIds.every(id => live.evidence_ids.includes(id))) throw new Error('review input changed: evidence_ids');
+}
+function explicitVerdict(output) {
+  const lines=output.replace(/^[\ufeff\r\n]+/,'').split(/\r?\n/);
+  if (lines[0] && lines[0].trim()==='---') {
+    const end=lines.findIndex((line,i)=>i>0 && line.trim()==='---');
+    if (end>0) {
+      for (const line of lines.slice(1,end)) {
+        const match=line.match(/^verdict\s*:\s*["']?(PASS|REWORK|FAIL|CONCERNS)\b/i);
+        if (match) return match[1].toUpperCase();
+      }
+    }
   }
+  const verdicts=[...new Set([...output.matchAll(/(?:^|[\s>])(?:VERDICT|verdict)\s*:\s*["']?(PASS|REWORK|FAIL|CONCERNS)\b/gm)].map(match=>match[1].toUpperCase()))];
+  if (!verdicts.length) throw new Error('native result has no explicit verdict');
+  if (verdicts.length!==1) throw new Error('native result has conflicting verdicts');
+  return verdicts[0];
 }
 function prepare(cwd,mode,inputs) {
   const [root,sprint] = input.context(cwd);
@@ -83,13 +110,13 @@ function prepare(cwd,mode,inputs) {
   const rows = events(sprint), latest = rows.filter(r=>r.event==='prepared').at(-1);
   if (latest && !rows.some(r=>r.review_run_id===latest.review_run_id && ['accepted','received','superseded'].includes(r.event))) throw new Error('review already pending; recover its receipt or explicitly supersede');
   require('./delivery-gate.cjs').validateReviewPacket(sprint);
-  let refs = [];
+  let docs = [];
   if (mode==='implementation') {
     if (!fs.existsSync(path.join(sprint,'evidence.yaml'))) throw new Error('implementation review requires evidence.yaml');
-    refs = ['evidence.yaml','runtime-verify.md','cleanup-pass.md','review-manifest.yaml'].filter(n=>fs.existsSync(path.join(sprint,n))).map(n=>path.relative(root,path.join(sprint,n)).split(path.sep).join('/'));
+    docs = ['runtime-verify.md','cleanup-pass.md','review-manifest.yaml'].filter(n=>fs.existsSync(path.join(sprint,n))).map(n=>path.relative(root,path.join(sprint,n)).split(path.sep).join('/'));
   }
   const row = {event:'prepared',schema_version:1,review_run_id:crypto.randomUUID(),mode,author_target:process.env.CODEX_THREAD_ID || process.env.CLAUDE_SESSION_ID || '',
-    input_paths:[...new Set(inputs)].sort(),evidence_refs:Object.fromEntries(refs.map(n=>[n,'']))};
+    input_paths:[...new Set(inputs)].sort(),evidence_docs:Object.fromEntries(docs.map(n=>[n,'']))};
   Object.assign(row,liveInput(root,sprint,row));
   return append(sprint,row);
 }
@@ -139,9 +166,7 @@ function accept(cwd,run,receipt) {
   if (target!==bound[0].reviewer_target || !['completed','complete','succeeded'].includes(status) || !output.trim()) throw new Error('wrong target, unknown/incomplete native result, or missing output');
   assertLive(root,sprint,prepared);
   validateNativeMetadata(output,prepared,root);
-  const verdicts = [...output.matchAll(/^\s*(?:VERDICT|verdict)\s*:\s*["']?(PASS|REWORK|FAIL|CONCERNS)\b/gm)];
-  if (!verdicts.length) throw new Error('native result has no explicit verdict');
-  const verdict=verdicts.at(-1)[1];
+  const verdict=explicitVerdict(output);
   const [ref,sha] = persistReceipt(sprint,run,'result',receipt), doc=path.join(sprint,'reviews',prepared.mode+'-review.md');
   const fm = {schema_version:1,mode:prepared.mode,review_run_id:run,reviewer_target:target,packet_sha256:prepared.packet_sha256,
     input_manifest_sha256:prepared.input_manifest_sha256,native_output_ref:ref,verdict};

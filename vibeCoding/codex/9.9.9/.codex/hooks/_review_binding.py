@@ -102,6 +102,18 @@ def file_refs(root: Path, names: list[str]) -> dict:
         result[name] = digest(file.read_bytes())
     return result
 
+def evidence_ids(sprint: Path) -> list[str]:
+    file = sprint/'evidence.yaml'
+    if not file.is_file():
+        return []
+    found = re.findall(r'(?m)^\s*-\s+tool_use_id\s*:\s*([^#\n]*)', file.read_text())
+    ids = []
+    for raw in found:
+        ident = raw.strip().strip('"\'')
+        if ident and ident not in {'[]', 'null', '~'}:
+            ids.append(ident)
+    return sorted(set(ids))
+
 def live_input(root: Path, sprint: Path, prepared: dict) -> dict:
     mode = prepared['mode']
     inputs = file_refs(root, prepared.get('input_paths', []))
@@ -112,13 +124,37 @@ def live_input(root: Path, sprint: Path, prepared: dict) -> dict:
     return {'base_commit':git(root,'rev-parse','HEAD').decode().strip(),
             'packet_sha256':digest((sprint/'review-packet.md').read_bytes()),
             'input_manifest_sha256':digest(canonical(inputs)),
-            'evidence_refs':file_refs(root,list(prepared.get('evidence_refs',{})))}
+            'evidence_ids':evidence_ids(sprint),
+            'evidence_docs':file_refs(root,list(prepared.get('evidence_docs',{})))}
 
 def assert_live(root: Path, sprint: Path, prepared: dict) -> None:
     live = live_input(root,sprint,prepared)
-    for field in ('base_commit','packet_sha256','input_manifest_sha256','evidence_refs'):
+    # base_commit is recorded, not compared: ship bookkeeping commits must not void a review.
+    for field in ('packet_sha256','input_manifest_sha256'):
         if live[field] != prepared[field]:
             raise ValueError('review input changed: '+field)
+    if live['evidence_docs'] != prepared.get('evidence_docs', {}):
+        raise ValueError('review input changed: evidence_docs')
+    prepared_ids = prepared.get('evidence_ids') or []
+    live_ids = set(live['evidence_ids'])
+    if any(ident not in live_ids for ident in prepared_ids):
+        raise ValueError('review input changed: evidence_ids')
+
+def explicit_verdict(output: str) -> str:
+    lines = output.lstrip('\ufeff\r\n').splitlines()
+    if lines and lines[0].strip() == '---':
+        end = next((i for i in range(1,len(lines)) if lines[i].strip() == '---'), None)
+        if end:
+            for line in lines[1:end]:
+                match = re.match(r'^verdict\s*:\s*["\']?(PASS|REWORK|FAIL|CONCERNS)\b', line, re.I)
+                if match:
+                    return match.group(1).upper()
+    verdicts = list(dict.fromkeys(re.findall(r'(?:^|[\s>])(?:VERDICT|verdict)\s*:\s*["\']?(PASS|REWORK|FAIL|CONCERNS)\b', output, re.M)))
+    if not verdicts:
+        raise ValueError('native result has no explicit verdict')
+    if len(verdicts) != 1:
+        raise ValueError('native result has conflicting verdicts')
+    return verdicts[0]
 
 def prepare(cwd: Path, mode: str, inputs: list[str]) -> dict:
     root,sprint = context(cwd)
@@ -130,14 +166,14 @@ def prepare(cwd: Path, mode: str, inputs: list[str]) -> dict:
         if latest and not any(r.get('review_run_id') == latest[-1]['review_run_id'] and r.get('event') in {'accepted','received','superseded'} for r in rows):
             raise ValueError('review already pending; recover its receipt or explicitly supersede')
     delivery_gate().validate_review_packet(sprint)
-    refs = []
+    docs = []
     if mode == 'implementation':
         if not (sprint/'evidence.yaml').is_file():
             raise ValueError('implementation review requires evidence.yaml')
-        refs = [(sprint/name).relative_to(root).as_posix() for name in ('evidence.yaml','runtime-verify.md','cleanup-pass.md','review-manifest.yaml') if (sprint/name).is_file()]
+        docs = [(sprint/name).relative_to(root).as_posix() for name in ('runtime-verify.md','cleanup-pass.md','review-manifest.yaml') if (sprint/name).is_file()]
     row = {'event':'prepared','schema_version':1,'review_run_id':str(uuid.uuid4()),'mode':mode,
            'author_target':os.environ.get('CODEX_THREAD_ID') or os.environ.get('CLAUDE_SESSION_ID') or '',
-           'input_paths':sorted(set(inputs)), 'evidence_refs':dict.fromkeys(refs,'')}
+           'input_paths':sorted(set(inputs)), 'evidence_docs':dict.fromkeys(docs,'')}
     row.update(live_input(root,sprint,row))
     return append(sprint,row)
 
@@ -204,10 +240,7 @@ def accept(cwd: Path, run: str, receipt: Path) -> dict:
         raise ValueError('wrong target, unknown/incomplete native result, or missing output')
     assert_live(root,sprint,prepared)
     validate_native_metadata(output,prepared,root)
-    verdicts = re.findall(r'^\s*(?:VERDICT|verdict)\s*:\s*["\']?(PASS|REWORK|FAIL|CONCERNS)\b',output,re.M)
-    if not verdicts:
-        raise ValueError('native result has no explicit verdict')
-    verdict = verdicts[-1]
+    verdict = explicit_verdict(output)
     ref,sha = persist_receipt(sprint,run,'result',receipt)
     doc = sprint/'reviews'/(prepared['mode']+'-review.md')
     fm = {'schema_version':1,'mode':prepared['mode'],'review_run_id':run,'reviewer_target':target,'packet_sha256':prepared['packet_sha256'],

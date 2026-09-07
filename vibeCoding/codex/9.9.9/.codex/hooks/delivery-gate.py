@@ -1107,6 +1107,7 @@ def parse_review_manifest(path: Path, path_type: str) -> tuple[str, str, dict[st
 
 
 INDEX_GOVERNANCE_FIELDS = (
+    "version",
     "path",
     "current_sprint_slug",
     "skip_polish",
@@ -1298,6 +1299,10 @@ def is_light_ship_file(file: str) -> bool:
         return False
     if re.search(r"(^|/)settings(\.local)?\.json$", file):
         return False
+    if re.search(r"(^|/)config\.toml$", file):
+        return False
+    if re.search(r"(^|/)hooks\.json$", file):
+        return False
     # Source logic (non-test code) needs review even when small -- never light.
     is_test = bool(
         re.search(r"(^|/)(tests?|__tests__|specs?)/", file)
@@ -1333,24 +1338,44 @@ def ship_change_is_light(cwd: Path) -> bool:
                     base = f"origin/{branch}"
     if base is None:
         return False
-    ok, rows = git_lines(cwd, ["diff", "--numstat", f"{base}..HEAD"])
-    if not ok:
-        return False
     total_lines = 0
     files: list[str] = []
-    for row in rows:
-        cols = row.split("\t")
-        if len(cols) < 3:
-            continue
-        file = cols[2]
+
+    def add_numstat(ok: bool, rows: set[str]) -> bool:
+        nonlocal total_lines
+        if not ok:
+            return False
+        for row in rows:
+            cols = row.split("\t")
+            if len(cols) < 3:
+                continue
+            file = cols[2]
+            files.append(file)
+            # .ai_state/ is auto-maintained state (token-usage churn, logs, pointers) and does
+            # not count toward the line budget -- only toward file eligibility below.
+            if re.search(r"(^|/)\.ai_state/", file):
+                continue
+            added = int(cols[0]) if cols[0].isdigit() else 0
+            deleted = int(cols[1]) if cols[1].isdigit() else 0
+            total_lines += added + deleted
+        return True
+
+    # Light-ship surface is committed-ahead ∪ worktree ∪ untracked.
+    if not add_numstat(*git_lines(cwd, ["diff", "--numstat", f"{base}..HEAD"])):
+        return False
+    if not add_numstat(*git_lines(cwd, ["diff", "--numstat", "HEAD"])):
+        return False
+    ok, untracked = git_lines(cwd, ["ls-files", "-o", "--exclude-standard"])
+    if not ok:
+        return False
+    for file in untracked:
         files.append(file)
-        # .ai_state/ is auto-maintained state (token-usage churn, logs, pointers) and does
-        # not count toward the line budget -- only toward file eligibility below.
         if re.search(r"(^|/)\.ai_state/", file):
             continue
-        added = int(cols[0]) if cols[0].isdigit() else 0
-        deleted = int(cols[1]) if cols[1].isdigit() else 0
-        total_lines += added + deleted
+        try:
+            total_lines += len((cwd / file).read_text(encoding="utf-8").splitlines())
+        except (OSError, UnicodeError):
+            total_lines += 1
     if not files:
         return False
     if total_lines > SHIP_LIGHT_MAX_LINES:

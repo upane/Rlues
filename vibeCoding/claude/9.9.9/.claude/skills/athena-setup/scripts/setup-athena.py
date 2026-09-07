@@ -128,6 +128,31 @@ def locate_package(kind: str, args: argparse.Namespace) -> Path | None:
     return None
 
 
+MANAGED_DENY = (
+    "Agent(critic)",
+    "Agent(evaluator)",
+    "Agent(spec-compliance)",
+)
+REQUIRED_ASSETS = {
+    "cc": (
+        ".claude/hooks/delivery-gate.cjs",
+        ".claude/hooks/_review-binding.cjs",
+        ".claude/hooks/_input-binding.cjs",
+        ".claude/hooks/pre-bash-guard.cjs",
+    ),
+    "cx": (
+        ".codex/hooks/delivery-gate.py",
+        ".codex/hooks/_review_binding.py",
+        ".codex/hooks/_input_binding.py",
+        ".agents/skills/pace/scripts/review-binding.py",
+    ),
+}
+
+
+def managed_complete(kind: str, home: Path) -> bool:
+    return all((home / relative).is_file() for relative in REQUIRED_ASSETS[kind])
+
+
 def read_version(kind: str, home: Path) -> tuple[str, str | None]:
     config = home / (".claude/settings.json" if kind == "cc" else ".codex/config.toml")
     if not config.exists():
@@ -144,6 +169,8 @@ def read_version(kind: str, home: Path) -> tuple[str, str | None]:
     except (OSError, ValueError, tomllib.TOMLDecodeError):
         return "occupied", None
     if version == VERSION:
+        if not managed_complete(kind, home):
+            return "incomplete", version
         return "same", version
     if isinstance(version, str) and version:
         return "old", version
@@ -292,6 +319,25 @@ def merged_hooks(current, baseline, proposed):
     return current
 
 
+def apply_managed_cc_policy(current, old, proposed):
+    """Apply 9.9.9 managed deny/plugin diffs without rewriting user-owned keys."""
+    deny = current.setdefault('permissions', {}).setdefault('deny', [])
+    if not isinstance(deny, list):
+        raise SetupError('existing CC permissions.deny must be a list')
+    proposed_deny = proposed.get('permissions', {}).get('deny', []) if isinstance(proposed.get('permissions'), dict) else []
+    for item in MANAGED_DENY:
+        if item in proposed_deny and item not in deny:
+            deny.append(item)
+    proposed_plugins = proposed.get('enabledPlugins') if isinstance(proposed.get('enabledPlugins'), dict) else {}
+    old_plugins = old.get('enabledPlugins') if isinstance(old.get('enabledPlugins'), dict) else {}
+    current_plugins = current.setdefault('enabledPlugins', {})
+    if not isinstance(current_plugins, dict):
+        raise SetupError('existing CC enabledPlugins must be an object')
+    for key, value in proposed_plugins.items():
+        if key not in current_plugins or current_plugins.get(key) == old_plugins.get(key):
+            current_plugins[key] = value
+
+
 def config_merge(package, baseline, kind, home):
     target = home / ('.claude/settings.json' if kind == 'cc' else '.codex/config.toml')
     if not target.exists():
@@ -303,7 +349,9 @@ def config_merge(package, baseline, kind, home):
         proposed = json.loads((package / 'settings.json').read_text())
         old = json.loads((baseline / 'settings.json').read_text()) if baseline else {}
         current.setdefault('env', {})['VIBECODING_ATHENA_VERSION'] = VERSION
-        current['hooks'] = merged_hooks(current.get('hooks', {}), old.get('hooks', {}), proposed.get('hooks', {}))
+        if baseline:
+            current['hooks'] = merged_hooks(current.get('hooks', {}), old.get('hooks', {}), proposed.get('hooks', {}))
+            apply_managed_cc_policy(current, old, proposed)
         return (json.dumps(current, indent=2, ensure_ascii=False) + '\n').encode()
     content = target.read_text()
     before = tomllib.loads(content)
@@ -332,19 +380,43 @@ def is_preserved_session(relative: Path) -> bool:
     return any(posix == prefix.rstrip('/') or posix.startswith(prefix) for prefix in PRESERVED_SESSION_PREFIXES)
 
 
-def prune_old_installer_backups(home: Path, keep: Path | None) -> None:
-    """Already-installed machines may drop older installer backups after a successful write."""
+def prune_old_installer_backups(home: Path, keep: Path | None, platforms: list[str], install_kind: str) -> None:
+    """Drop older same-platform fresh/redeploy backups. Never auto-delete migrate backups."""
+    if install_kind == 'migrate':
+        return
     root = home / '.athena/backups'
     if not root.is_dir() or root.is_symlink():
         return
     keep_resolved = keep.resolve() if keep else None
+    wanted = set(platforms)
+    to_delete = []
     for child in sorted(root.iterdir()):
         if not child.is_dir() or child.is_symlink():
             continue
         if keep_resolved and child.resolve() == keep_resolved:
             continue
-        if not (child / 'transaction.json').is_file():
+        journal = child / 'transaction.json'
+        if not journal.is_file():
             continue
+        try:
+            record = json.loads(journal.read_text())
+        except (OSError, ValueError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        if record.get('install_kind') == 'migrate':
+            continue
+        recorded = record.get('platforms')
+        if not isinstance(recorded, list) or set(recorded) != wanted:
+            continue
+        if record.get('install_kind', 'redeploy') != install_kind:
+            continue
+        to_delete.append(child)
+    if not to_delete:
+        return
+    print('pruning installer backups:')
+    for child in to_delete:
+        print('  ' + str(child))
         shutil.rmtree(child)
 
 
@@ -405,10 +477,10 @@ def install_plan(args, home):
             content = source.read_bytes()
             if destination.exists() and destination.read_bytes() != content:
                 old = source_map.get(str(relative))
-                if kind == 'cx' and relative == Path('.codex/hooks.json'):
+                if kind == 'cx' and relative == Path('.codex/hooks.json') and old is not None:
                     current = json.loads(destination.read_text())
                     proposed = json.loads(content)
-                    previous = json.loads(old.read_text()) if old else {}
+                    previous = json.loads(old.read_text())
                     content = (json.dumps(merged_hooks(current, previous, proposed), indent=2) + '\n').encode()
                 elif old is None or destination.read_bytes() != old.read_bytes():
                     overrides.append(str(relative))
@@ -432,7 +504,7 @@ def restore_backup(home, backup):
             raise SetupError('invalid rollback path')
         destination = home / relative
         check_destination(home, destination)
-        if not destination.is_file() or sha256(destination) != row['after_sha256']:
+        if destination.is_file() and sha256(destination) != row['after_sha256']:
             raise SetupError('later user edit prevents rollback: ' + row['path'])
         if row['existed']:
             original = backup / 'files' / relative
@@ -447,17 +519,27 @@ def restore_backup(home, backup):
     print('rollback complete; preserved files restored')
 
 
-def apply_transaction(home, changes):
+def apply_transaction(home, changes, platforms=None, install_kind='redeploy'):
     if not changes:
         return None
     for folder in [home / '.athena', home / '.athena/backups']:
         if folder.is_symlink():
             raise SetupError('backup directory must not be a symlink')
-    backup = home / '.athena/backups' / (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f') + '-' + uuid.uuid4().hex[:8])
+    label = '+'.join(platforms or []) or 'unknown'
+    backup = home / '.athena/backups' / (
+        datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f') + '-' + uuid.uuid4().hex[:8] + '-' + label + '-' + install_kind
+    )
     backup.mkdir(parents=True, mode=0o700)
     backup.parent.chmod(0o700)
     backup.parent.parent.chmod(0o700)
-    record = {'schema': 1, 'home': str(home), 'version': VERSION, 'files': []}
+    record = {
+        'schema': 1,
+        'home': str(home),
+        'version': VERSION,
+        'platforms': list(platforms or []),
+        'install_kind': install_kind,
+        'files': [],
+    }
     for target, content, _, _ in changes:
         existed = target.exists()
         row = {'path': target.relative_to(home).as_posix(), 'existed': existed, 'after_sha256': hashlib.sha256(content).hexdigest()}
@@ -509,17 +591,23 @@ def main():
             restore_backup(home, args.rollback)
             return 0
         changes, overrides = install_plan(args, home)
-        print(json.dumps({'version': VERSION, 'platforms_enabled': ['cc', 'cx'] if args.only == 'both' else [args.only],
+        kinds = ['cc', 'cx'] if args.only == 'both' else [args.only]
+        print(json.dumps({'version': VERSION, 'platforms_enabled': kinds,
                           'changed_paths': [target.relative_to(home).as_posix() for target, _, _, _ in changes],
                           'preserved_user_overrides': overrides, 'dry_run': args.dry_run}))
         if args.dry_run:
             print('dry-run: no files changed')
             return 0
-        state_before = [read_version(kind, home)[0] for kind in (['cc', 'cx'] if args.only == 'both' else [args.only])]
-        already_installed = any(state in {'old', 'same'} for state in state_before)
-        backup = apply_transaction(home, changes)
-        if already_installed and backup is not None and not args.dry_run:
-            prune_old_installer_backups(home, backup)
+        state_before = [read_version(kind, home)[0] for kind in kinds]
+        if args.migrate:
+            install_kind = 'migrate'
+        elif all(state == 'fresh' for state in state_before):
+            install_kind = 'fresh'
+        else:
+            install_kind = 'redeploy'
+        backup = apply_transaction(home, changes, kinds, install_kind)
+        if backup is not None and not args.dry_run:
+            prune_old_installer_backups(home, backup, kinds, install_kind)
         print('setup complete; backup=' + str(backup) if backup else 'same-version: no files changed')
         print('sessions preserved: .claude/sessions .codex/sessions history.jsonl file-history projects')
         print('hook trust: unchanged; changed hooks may require native review')

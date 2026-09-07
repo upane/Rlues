@@ -11,10 +11,38 @@ from typing import Callable
 
 MAX_WAIT_S = 0.8
 SLEEP_S = 0.025
+LOCK_STALE_S = 10
 _owned: dict[str, str] = {}
 
 def _lock_path(idx: Path) -> Path:
     return idx.with_name(idx.name + '.lock')
+
+def _legacy_lock_blocks(idx: Path) -> bool:
+    lp = _lock_path(idx)
+    try:
+        st = lp.stat()
+    except FileNotFoundError:
+        return False
+    pid = None
+    try:
+        data = json.loads(lp.read_text())
+        if isinstance(data, dict) and isinstance(data.get('pid'), int):
+            pid = data['pid']
+    except (ValueError, OSError):
+        pid = None
+    if pid is not None:
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            lp.unlink(missing_ok=True)
+            return False
+        except PermissionError:
+            return True
+    if time.time() - st.st_mtime > LOCK_STALE_S:
+        lp.unlink(missing_ok=True)
+        return False
+    return True
 
 def _contenders(idx: Path):
     prefix = idx.name + '.lock.'
@@ -56,7 +84,7 @@ def acquire(idx: Path) -> bool:
         ticket = max(tickets, default=0) + 1
         write_atomic(contender, json.dumps({'pid':os.getpid(),'ticket':ticket}))
         while True:
-            blocked = _lock_path(idx).exists()
+            blocked = _legacy_lock_blocks(idx)
             for file, number, other_token in _contenders(idx):
                 if file == contender:
                     continue

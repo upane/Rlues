@@ -5,7 +5,6 @@ model: inherit
 permissionMode: default
 tools: [Read, Write, Edit, Bash, Grep, Glob]
 background: false
-isolation: worktree
 skills: [polish, architect-doc, compound]
 ---
 

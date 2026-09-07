@@ -1,150 +1,102 @@
-# PACE References · Stages (v9.9.9)
+# PACE References · Stages（9.9.9, Claude Code）
 
-> 从 pace/SKILL.md 下沉的 stage 详解. 进入某 stage 前 Read 对应段即可, 不必全读.
+本页是本发行包阶段义务的唯一正文。其他 agent/skill/模板引用本页；恢复、review 绑定、证据与整合细则见 [execution-contracts.md](execution-contracts.md)。PACE 控制工作，.ai_state 保存合同与事实；CC-only 可完成适用全流程。
 
-## brainstorm (借 CodeStable + Superpowers)
+## brainstorm
 
-**触发**: 用户描述模糊 / 显式说 "想法不清楚" / 无法直接写出可验收标准
-**职责**: 多轮对话理清楚, 不评估不约束
-**产出**: `sprints/{date}-{slug}/brainstorm.md`
-**出口**: 足以形成可观察验收即结束，无固定追加问数。
-**路由**: → plan (清晰) / → roadmap (≥2 独立验收切片) / → design (System 路径需求清晰)
-**详**: `~/.claude/skills/brainstorm/SKILL.md`
+触发：无法从现有输入写出可观察验收标准，或用户明确要求探索。
+主 agent 先查可取得的上下文，再问影响下一动作的问题；足以进入 plan/roadmap/design 即收敛，不固定追加问题。
+产出 `sprints/{slug}/brainstorm.md`，只存结论、理由与约束。具体方法见 [brainstorm](../../brainstorm/SKILL.md)。
 
-## roadmap (借 CodeStable)
+## roadmap
 
-**触发**: ≥2 个可独立验收、可独立 ship 的切片 / 显式 "拆分" (hotfix2: 模块数只定风险等级, 不单独触发)
-**职责**: 拆 feature 序列, 产出 items.yaml + roadmap.md
-**调度**: delivery-gate 与主 agent 在 ship 后核对并推进下一 item
-**详**: `~/.claude/skills/roadmap/SKILL.md`
+触发：≥2 个可独立验收、可独立 ship 的切片，或用户明确要求拆分。模块数只定风险等级，不单独强制 roadmap。
+主 agent 维护 `roadmap/{slug}/roadmap.md` 与 `items.yaml`，依赖使用 blocked_by；共享不变量不可独立交付时保留单 sprint。
+ship 后核对当前 item，再推进可执行项。见 [roadmap](../../roadmap/SKILL.md)。
 
 ## plan
 
-**进入条件**: brainstorm/roadmap 完成, 或需求清晰直接进
-**工作流**:
-1. 作者写 `design.md`（含验收标准 / Done Contract）
-2. 机械派生 `review-packet.md`（hash + 完整 AC ID，≤80 行）。作者不 spawn critic，不给自己的设计打 VERDICT
-3. Feature 默认无独立设计审查；Refactor/System 或用户显式要求：由**非作者会话**执行 packet → `reviews/design-review.md`
-4. 进 impl 前 spec-gate 验 AC + packet 双射
+1. 作者写 design.md：目标、决策、允许写集与可观察 Done Contract（验收标准）。
+2. Feature+ 机械派生 review-packet.md：实际 design hash、完整 AC ID 双射、≤80 行。作者不自审或给设计打 VERDICT。
+3. Feature 默认无固定设计审查；Refactor/System 或用户要求时，由非作者独立上下文按 packet 审查，允许本平台 reviewer。
+4. impl-entry spec-gate 核验验收标准与 packet 一致；判据变化回 design 修订并更新派生材料。
 
-**例外**: Hotfix 可省略 design
+Hotfix 可省略设计；Quick 采用简短计划和必要验收。不为纯文档或机械配置制造行为测试。
 
-## design (System 路径)
+## design
 
-System 路径专用, plan 通过后进 design 出详细架构. 可 spawn `architect` subagent.
+System 在 plan 后补详细架构；可请求只读 architect 返回提案，由主 agent 落盘。独立设计挑战沿用 plan 的一次入口，不创建 critic/evaluator 链。
 
-## impl (铁律[零写入] 按区路由)
+## impl
 
-**工作流**:
-1. **done_contract 写进 design.md 的 `## Done Contract` 段** (2026-07-28 gate-descaling: 不再单立 checklist.yaml, 消灭双写):
-   逐条把验收标准写成**可机械判定**的完成条件 (命令 + 期望输出 / 文件 + 断言)。
-   铁律: generator 与一轮 reviewer 判的是**同一份 done_contract**; 不得在 review 时另造判据,
-   generator 也不得自行放宽。判据要改 → 回 design 改, 不在 impl 里私改。
-   checklist.yaml 降为**可选** (超大 sprint 需要任务推进表时才建; 存在则 delivery-gate 照旧验全绿)
-2. 绿区任务 (≤3 文件且合计 ≤150 行, 或 Hotfix/Quick/Bugfix): 主 agent 直接做, 不强制 subagent
-3. 黄区: 调用 generator subagent (TDD: 测试先, 代码后); Feature+ 必须留下 generator 的 Stop 完成记录, 仅 Start 不算完成；writer 派发先完成 orchestration.md 的 spawn-binding-handshake
-4. 红区 (Refactor/System): generator **必须 `isolation: worktree`**
-5. 并行多 generator (大改): 也强制 worktree
-6. 超大规模 (≥5 独立同构子任务): 评估 ultracode, 见 `references/orchestration.md`
-7. PostToolUse 对 validation command 写脱敏 evidence.yaml; 普通工具不写 raw tool-trace (W35)
-8. v9.9.0: index-updater 检测改动文件数超路径上限 (Quick>3/Feature>10) → next_action=re-route,
-   主 agent 停当前 task 重走路由审议 (只升不降, 补新路径欠的 stage)
+Done Contract 以 design.md 为唯一权威；generator 与 reviewer 使用相同验收。checklist.yaml 只在需要推进表时创建，存在才由主 agent 更新并在交付前验证全绿；不能另定义验收。
 
-## runtime-verify (v9.8.0, System/Refactor 强制 · Feature 可选)
+- 绿区：≤3 文件且合计 ≤150 行，或 Hotfix/Quick/Bugfix，主 thread 可直接实施。
+- 黄区：单模块 Feature，调用 generator，worktree 可选。
+- 红区：Refactor/System 或 ≥2 并行 writer。主 thread 先创建含实际待改内容的 worktree，再在任务消息给出绝对路径与互斥写集；agent 首条 shell `pwd`，以后每次 shell 指定 `workdir`。
+- writer 先完成 [spawn binding handshake](orchestration.md#spawn-binding-handshake)，BOUND 后写入；共享文件单写者，最终验证由整合者负责。
+- repo 外安装态目标不受 worktree 隔离：仅在授权范围内逐文件备份、单写者串行，并记录 `_index.harness_target_outside_repo: true`。
+- 行为实现按 TDD red→green；验证命令由 evidence collector 留真实成功/失败记录。纯文档做解析、引用与一致性检查，不写镜像测试或伪造 RED。
+- 路径证据变化时重走路由，默认只升不降并补足新路径义务。
 
-impl 与适用单测完成后，按 design 与 runtime-env 运行真实场景：
-- 本机满足合同即可；VM 是否 required 由验收决定，配置存在或 SSH 可达不等于项目 scenario ready。
-- 当前原生 `/goal` 可用且已授权时可承载长任务；不可用则沿本端会话执行，不依赖另一平台或自造循环。
-- 前端用 playwright，后端真实 API，CLI 用实际命令与退出码断言；产物为 `runtime-verify.md`，含 `## 测试场景`。
-- 证据有效性见 [state-contract.md](state-contract.md)；全栈准入见 [fullstack-contract.md](fullstack-contract.md)，runner 细节由 `/athena-runtime-verify` 与 `/athena-vm` 执行。
-- 问题回 impl 修复并复验相关场景；R/S 下一步 polish，Feature 下一步 review。已过检查只因变化/失败/剩余风险重复。
+## runtime-verify
 
-## review（一次独立多维审查）
+Refactor/System 强制，Feature 按合同需要。impl 和单测后运行真实接口/CLI/UI 场景，失败返回 impl，修复后复验受影响范围。
+环境由设计/runtime-env 决定：本机满足合同即可；VM 配置存在或 SSH 可达不代表项目 ready，也不自动增加 VM 门禁。required 环境不可用只阻塞相关验收。
+原生 Goals 仅在用户显式要求或已有 Goal 时使用，不因进入阶段自动创建。用当前工具完成有界执行，不新建续跑循环。
+产出 `runtime-verify.md`（含 `## 测试场景`）和实际执行证据；FE 用 [playwright](../../playwright/SKILL.md)，运行环境见 [athena-runtime-verify](../../athena-runtime-verify/SKILL.md)。
+出口：Refactor/System → polish；其他路径 → review。
 
-1. 审查最终整合代码；Refactor/System 已完成 runtime-verify → polish。CC 原生 review 可用优先，否则本端只读 reviewer/独立会话。
-2. 派发、真实 target、packet/输入/证据绑定与接收仅按 [execution-contracts.md](execution-contracts.md)。只读 reviewer 不写共享状态，由主 agent 保存原始结果和接收封装。
-3. 仅实际异步调用设 `next_action=await-review-result`，Stop 放行且不续跑；前台返回直接接受校验。等待不重复派发；缺结果不能 ship。
-4. 结果为 `reviews/implementation-review.md`，含现有 frontmatter/hash、review_run_id、native_output_ref 与原文 findings。run/packet/内容失配保持未完成，旧结果保存 superseded。
-5. 待审内容变化才针对性复核；同因新 P0 第二次复核仍出现交还用户。
+## polish
 
-VERDICT: **PASS | CONCERNS | REWORK | FAIL**。PASS 后才进入 ship；其余按 findings 回对应 impl/design。禁止调度 critic/evaluator/spec-compliance，禁止作者伪造独立 PASS。
+Refactor/System 在 runtime-verify 后、implementation review 前执行。polish_worker 沿用当前实现 worktree与明确写集；按 writer 握手绑定，主 agent 传入既有实现 worktree 绝对路径，不另开 isolation: worktree。
+检查临时代码、注释、冗余、低效、过度设计；只清理实际问题。改变行为后运行受影响验证，产生新风险则返回 impl/runtime-verify。
+主 agent 复核产物，落 cleanup-pass.md，按实际变化更新 architecture/与有价值的 compound。
+清理完成 → review；skip_polish 不豁免 review。分支合并、推送及 worktree 清理在 ship 按已有授权处理，不在 polish 提前销毁待审工作树。
+具体操作见 [polish](../../polish/SKILL.md)。
 
-## polish (Refactor/System 强制，且在 review **之前**)
+## review
 
-主 agent 派发有界 `polish-worker`，沿既有实现 worktree 串行清理：
-- 临时代码、注释、冗余、低效、过度设计五项；只修与当前合同有关的内容。
-- 主 agent 根据返回与实际 diff 写 `cleanup-pass.md`，维护所需 architecture/ 与有价值 compound。
-- 清理改动运行相关检查；失败回 impl/runtime-verify。完成设置下一步 review，不能直接 ship。
-- 使用现有 worktree 不额外嵌套隔离；writer 绑定与例外按 orchestration。合并、PR、推送、worktree 清理留到 ship 按有效授权处理。
+发起一次独立多维 review：优先当前可用原生 `/code-review`，否则一个只读 reviewer/本平台独立会话。无需 CX/Grok 或不同模型家族。
+检查 Spec coverage、Correctness、Security、Test risk、Over-engineering；R/S 加 Evidence。禁止 live 调度 critic/evaluator/spec-compliance。
+派发前持久绑定实际 run、packet、输入与证据，按 [接收合同](execution-contracts.md#一次独立审查的派发与接收) 核验。同步结果直接接收；只有真实异步调用设置 `next_action=await-review-result`，Stop 放行不续跑，通知/回读恢复后清空。
+结果保存 `reviews/implementation-review.md`，包含 verdict、review_run_id、native_output_ref、packet/diff 绑定和 findings；原生原文保留可回读引用。
+VERDICT：PASS / CONCERNS / REWORK / FAIL。PASS → ship；其他结果按实际问题回 impl/design。审查输入变化须针对性复核；同因新 P0 第二次复核仍出现则保留证据并交还用户。未知/缺失/旧结果不能视为 PASS。
 
 ## ship
 
-主 agent 按用户有效授权 commit、push 或提交可审查产物；无发布授权保留 candidate。delivery-gate 检查 (2026-07-28 gate-descaling 后):
-- Refactor/System: 必须有 cleanup-pass.md
-- Refactor/System (≥5 文件): 必须更新 architecture/ (铁律[门禁])
-- design_changed_after_impl=true: block 直到重新 review
-- Feature/Refactor/System: `reviews/implementation-review.md` frontmatter `verdict: PASS`，含 `review_run_id` 与 `native_output_ref`；packet/diff hash 与现场重算一致
-- Feature+ 必须有共享 assignments/events JSONL 中完整 generator Start→assignment→Stop 链 (逃生: skip_impl_subagent_check)
-- 不再用 Critic Findings 标题计数；design.md >300 行 stderr 警告
-- 已有 review-manifest 存在时继续验全链（design.md 与 R/S runtime-verify.md）；当前审查派发/接受的最小持久绑定不得因 manifest 可选而省略，见 execution-contracts.md
-- hotfix2 (2026-07-29): AC11/12 保留标号豁免废除; token/tool-trace/snapshot/continuator 已退出默认 lifecycle (只在 ship 或显式采集); next_action 仅机器枚举
-- checklist.yaml 存在才验; 记账文件 (token-usage/tool-trace/stop-failures/harness-patches/proposals) 不受 post-review drift 拦截
-- 完整派工任务内联 Agent message；assignment/session-log 保存必要恢复事实，禁止 CODEX-TASK.md 类第二任务文档
-- AC 证据记法 (2026-07-28 W23): 跑真实验证命令后 evidence-collector 已自动落记录, agent 在该记录**补一行 `covers: [ACn]`** 即 admissible; 十字段手写 artifact 记录仅当命令证据不适用 (source: artifact/review) 时用
-- design.md mtime 晚于 implementation-review.md → block 重新 review
-- current_roadmap_slug 非空: 提示主 agent 继续下个 item
-- 长任务只在原生入口可用且已授权时使用 `/goal`；Done Contract 在 design.md，checklist 若存在也必须全绿
+按已授权范围交付，由 delivery-gate 现场核验适用合同：
 
-### 推送门禁 (pre-bash-guard) 与合法放行
+- Feature+ 的当前 implementation-review PASS 与 packet/diff/输入绑定有效，已有 review-manifest 的 commit/design/state 链不能被放松。
+- generator 实施须有真实 Start→assignment→Stop；绿区例外按既有 skip_impl_subagent_check 规则。
+- Refactor/System 已完成 runtime-verify、cleanup-pass 和适用 architecture 更新。
+- design/待审代码变化后原 PASS 不直接复用；checklist 存在才验全绿。
+- 执行证据引用真实来源，主 agent 只补 covers 映射；记账文件不人为触发无关复审。
+- roadmap item 事实同步，仍有未完成项时不宣称全部完成。
 
-两道独立门禁, 合法推送均无需伪造产物:
+完成当前必要检查后，只有新增变更、失败或未消除风险才扩大/重复验证；影响范围不明则保守复验。候选包、未满足验收与正式 ship 状态必须区分。
 
-- **pre-bash-guard** (Bash 前置) 拦 `git push`: 当前项目 stage 非 ship 且非空 (idle) → BLOCK。放行 = 走到 ship 再推, 或 `ATHENA_ALLOW_PUSH=1 git push …` (认命令内联标直接放行)。后者用于**推非当前 sprint 的维护性改动** (Athena 源仓自身 / 跨仓同步 / sprint 未 ship 但需推的记账 commit) —— **取代"切 stage=ship→推→回 plan"绕行**, 该绕行会连带触发下面的 ship 契约、制造记账噪声。
-- **delivery-gate 轻门禁 (v9.9.6)**: ship 时若净 diff (对 upstream) ≤60 行且仅触及文档 / 配置 / 依赖 / `.ai_state` / 测试 (排除 hooks/settings/源码逻辑) → 只校验 roadmap 一致性, 跳过 review-manifest / tdd-evidence / 当前实现审查; 源码 / harness / 超预算仍走完整契约 (fail-closed)。让纯文档 / 依赖类 ship 不再被迫产出机械改动无法诚实给出的 red→green。
+### 推送与小改动
 
-## 文书预算 (2026-07-28 gate-descaling — 反"程序员变文员")
+pre-bash-guard 与 delivery-gate 是独立门禁：正常推送在 ship；已有 `ATHENA_ALLOW_PUSH=1` 仅用于授权的非当前 sprint 维护性推送，不靠伪切 stage 绕行。
+≤60 行且满足轻门禁文件范围的纯文档/配置/依赖改动按实际 gate 判定；源码、hooks 与超预算仍走完整适用合同。门禁例外不意味着伪造审查/测试。
 
-实测病灶: 9.9.6 主 sprint 写入操作里 `.ai_state` 记账 102 次 vs 代码 15 次 (8.4%)。规则:
+## 文书与状态预算
 
-- **手写文档白名单**: design.md / review-packet.md / reviews/implementation-review.md / (Bugfix) issue-report+fix-note / (R/S) runtime-verify.md + cleanup-pass.md + 可选 session-log.md。route_history 单条 >160B 溢出搬到 route-note，不丢弃
-- **体积预算**: design.md 目标 ≤200 行 (System) / ≤80 行 (Feature); 超 300 行 stderr 警告 (不 block)
-- **判据**: 一个 sprint 内 agent 手写 md 字节数不应超过代码 diff 字节数; 超了 = 文书跑赢了产出, 停下反省而不是继续写
+必要 stage/next_action 转换及时更新，收尾集中同步结论；不要逐工具复制日志。_index ≤12 KiB、route/current-state 各 ≤10 条、条目 ≤160 B；超量原文与指针由现有索引事务保留。
+手写产物：design、派生 packet、implementation-review、Bugfix report/fix-note、R/S runtime-verify/cleanup-pass，以及按需 session-log；其他文件需真实消费者。design 目标 System ≤200 行/Feature ≤80 行，>300 行仅警告。
+派工全部内联原生消息，禁止 CODEX-TASK.md 等第二任务书；最短恢复事实落 session-log。archive 与 .runtime 不默认读取，不恢复自建 token 遥测。
 
-## 新数据目录 (v9.6.4 起)
+## 数据归属
 
-```
-.ai_state/
-├── _index.md                          # 项目状态 + frontmatter
-├── sprints/
-│   └── YYYY-MM-DD-{slug}/             # 一个 sprint 一目录
-│       ├── route-note.md              # (可选, 2026-07-28 起) 默认并入 _index.route_history 一行; 仅复杂 re-route 才单立
-│       ├── brainstorm.md              # (可选) brainstorm 产出
-│       ├── design.md                  # 含 ## Done Contract / 验收标准
-│       ├── review-packet.md           # 派生投影，≤80 行
-│       ├── checklist.yaml             # (可选, 2026-07-28 起) 超大 sprint 才建; 存在则验全绿
-│       ├── issue-report.md            # v9.8.0 Bugfix: 可复现报告 (athena-issue)
-│       ├── fix-note.md                # v9.8.0 Bugfix: 修复记录+验证 (delivery-gate 验)
-│       ├── runtime-verify.md           # v9.8.0 运行时自测自改 (delivery-gate 验)
-│       ├── reviews/implementation-review.md
-│       ├── cleanup-pass.md            # polish 产出
-│       ├── subagent-log.md            # 历史兼容视图, 默认不生成
-│       ├── subagent-events.jsonl      # CC/CX 共享 raw lifecycle schema
-│       ├── subagent-assignments.jsonl # 主 agent Start→任务意图握手
-│       ├── evidence.yaml              # validation success/failure 证据
-│       └── tool-trace.jsonl           # 仅 release-eval/显式采集, 默认不生成
-├── roadmap/
-│   └── {slug}/
-│       ├── roadmap.md
-│       └── items.yaml
-├── architecture/
-│   ├── ARCHITECTURE.md
-│   └── {type}-{slug}.md
-├── requirements/                     # v9.8.0 长效需求档 (WHY, 逃生通道)
-│   └── {slug}.md
-├── compound/
-│   ├── YYYY-MM-DD-learning-{slug}.md
-│   ├── YYYY-MM-DD-trick-{slug}.md
-│   ├── YYYY-MM-DD-decision-{slug}.md
-│   └── YYYY-MM-DD-explore-{slug}.md
-└── .snapshots/                        # PreCompact 快照
-```
+| 位置 | 职责 |
+|---|---|
+| `_index.md` | 当前路由、阶段和权威指针 |
+| `sprints/{slug}/design.md` / `review-packet.md` | 唯一验收与派生审查入口 |
+| `runtime-verify.md` / `evidence.yaml` | 场景覆盖与执行来源 |
+| `reviews/implementation-review.md` / `reviews/_native/` | 当前接收结果与原文 |
+| `subagent-events.jsonl` / `subagent-assignments.jsonl` | 原生生命周期与真实身份绑定 |
+| `session-log.md` | 中断、交接和整合的最短恢复事实 |
+| `roadmap/{slug}/items.yaml` | 切片状态与 blocked_by |
+| `requirements/` / `architecture/` / `compound/` | 耐久知识，旧决定不能覆盖新决定 |
+| `sprints/archive/` / `.runtime/` | 冷历史与可重建运行信息；默认不扫 |

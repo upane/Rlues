@@ -26,7 +26,12 @@ import uuid
 
 MAX_BYTES = 256 * 1024 * 1024
 MAX_LOG = 128 * 1024
-SECRET = re.compile(rb'-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|\b(?:sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,})\b|(?:password|passwd|api[_-]?key|access[_-]?token|client[_-]?secret)\s*["\x27]?\s*[:=]\s*["\x27]?[^\s"\x27,}]{8,}', re.I)
+SECRET = re.compile(
+    rb'-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----'
+    rb'|\b(?:sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,})\b'
+    rb'|(?:password|passwd|api[_-]?key|access[_-]?token|client[_-]?secret)\s*["\x27]?\s*[:=]\s*["\x27][^\s"\x27]{12,}["\x27]',
+    re.I,
+)
 
 
 def canonical(value):
@@ -108,6 +113,7 @@ def collect(repo, allow_untracked, omitted):
         data = path.read_bytes()
         if SECRET.search(data):
             exclusions.append({'path': name, 'reason': 'secret_pattern'})
+            print('excluded secret pattern: ' + name, file=sys.stderr)
             continue
         total += len(data)
         if total > MAX_BYTES:

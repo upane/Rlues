@@ -296,7 +296,7 @@ function analyze(command, depth = 0) {
       const cIndex = values.findIndex(value => value === "-c");
       if (cIndex >= 0 && values[cIndex + 1]) {
         const nested = analyze(values[cIndex + 1], depth + 1);
-        if (nested.danger) return nested;
+        if (nested.danger || nested.push) return nested;
       }
     }
     if (name === "git" && gitSubcommand(item.args) === "push") {

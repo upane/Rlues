@@ -132,7 +132,7 @@ def package_contracts():
 
 def behavior_tests():
     tests = ROOT / "vibeCoding/scripts/tests/athena999"
-    for name in ("test_state_review.py", "test_vm_install.py", "test_fullstack_contract.py", "test_laav.py"):
+    for name in ("test_state_review.py", "test_vm_install.py", "test_fullstack_contract.py", "test_laav.py", "test_claude_rework.py"):
         path = tests / name
         check(name + " exists", path.is_file())
         if not path.is_file():
