@@ -1,0 +1,13 @@
+# Athena Claude Code 9.9.9
+
+Status: candidate. Baseline: 9.9.8. This package is prepared for implementation review; it does not claim the release Done Contract or efficiency measurements have passed.
+
+CC-only is a complete supported design path; additional platforms are optional enhancements. PACE stage obligations live in pace/references/stages.md. design.md owns the Done Contract, checklist is optional, and Refactor/System follows runtime-verify → polish → one independent review.
+
+Candidate contracts cover bounded state recovery, actual-input evidence, review dispatch/acceptance binding, writer integration and real fullstack admission. Local and SSH VM execution are environment choices; transport readiness is distinct from project readiness.
+
+Fresh configuration respects the user's effective model and native default permission mode; the Codex connector is disabled by default. Agents do not set `maxTurns`. Native review prompt lives in `skills/athena-review/REVIEW.md` (Claude Code skill layout), not `~/.claude/REVIEW.md`. VM registry schema/example ships in the package; LLM-as-a-Verifier is an opt-in skill (`/llm-as-a-verifier`), default off, never a ship gate. Migration preserves user model/effort/provider/permissions, third-party assets, and chat sessions. Historical releases and closed sprint records remain intact. Already-installed machines may drop older installer backups after a successful transaction.
+
+Candidate verification includes isolated cc/cx/both installation, migration/rollback regressions, state/review fault cases, actual Codex configuration loading, and local + SSH HTTP/SQLite runner smoke with cleanup. The review packet records exact results. Pending release proof: representative CC-only/CX-only agent tasks, all native hook/review/worktree entry points, cross-session recovery, real FE/BE/DB business scenarios, and preregistered quality/efficiency comparison. These remain separate from candidate package checks. No installation update or publishing is implied by candidate status.
+
+Native configuration sources: [Claude Code settings](https://code.claude.com/docs/en/settings), [subagents](https://code.claude.com/docs/en/sub-agents). Actual version/entry evidence is required; rolling documentation alone is not runtime proof.

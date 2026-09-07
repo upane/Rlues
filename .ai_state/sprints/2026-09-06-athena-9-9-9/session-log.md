@@ -1,0 +1,73 @@
+---
+sprint_slug: "2026-09-06-athena-9-9-9"
+target_release: "9.9.9"
+scope: candidate-package-implementation
+implementation_status: in-progress
+---
+# 本轮状态与恢复入口
+
+用户要求9.9.9迭代文档，三个目标均覆盖；以PACE/.ai_state为核心，单平台完整、多平台增强。当前只完成研究和文档工作，不代表发行实现或已安装升级。
+基线：aa0ae23864a217002ab10610c93a3d9c22f01ecb。设计工作树：/Users/mi_manchi/workspace/Rlues-worktrees/athena-9.9.9-design，分支 codex/athena-9.9.9-design。主工作区已有的配置事件和上轮 brainstorm 改动需保留。
+
+## 文件入口与事实
+
+- design.md：架构、目录、迁移和14项实施验收；vm-design.md：用户VM的边界和输入/运行协议。
+- execution-contracts.md：审查绑定、writer恢复、业务准入；eval-plan.md：6任务矩阵及预注册判定。
+- ../../roadmap/athena-9-9-9/：6个切片，全部 pending；research.md：实际旧版冲突与一手出处。
+- grok-research.md：grok-4.6 最终独立观点；两次联网调用中断，第三次基于所供证据 end_turn。只保存最终文本与必要元数据。
+- VM只读观察：注册配置0600，key认证，SSH严格主机校验退出0；RHEL10.2/x86_64，docker/python3/node/git二进制存在。未做daemon或项目验证，不记录连接秘密。
+
+## 独立设计审查
+
+首轮run athena999_design_review，由实际 target /root/athena999_design_review 返回 REWORK：4项P1、1项P2。原文在 reviews/_native/athena999_design_review.md；当时packet在 reviews/_native/review-packet-initial.md，hash cfcfcf5e3514caa3acf85ffecbce75ba8413d1e3c9f183332aaafda9f82c6207。
+修订依次补齐：VM受控输入及远端校验、审查持久绑定、writer恢复事实、预注册效率规则、全栈项目准入。复用既有状态文件，无新增执行状态机。
+
+针对性复核已派发：
+
+| 项 | 实际值 |
+|---|---|
+| review_run_id / mode | athena999_design_review_followup / design |
+| reviewer_target | /root/athena999_design_review |
+| packet_sha256 | 2c667b047f9ef549634ad35b5d284843efd364b60039d83cfa4e1fdaf74555a4 |
+| base_commit | aa0ae23864a217002ab10610c93a3d9c22f01ecb |
+| input binding | review-packet.md.input_sha256 的8项文档；packet hash 同时绑定此清单 |
+| evidence scope | 纯设计与已列研究/观察；不验证9.9.9实现 |
+| expected raw output | reviews/_native/athena999_design_review_followup.md |
+| current result | PASS；原始返回与8项输入在接收时再次核对一致 |
+
+## 文档核验
+
+已通过 YAML 解析、8项输入hash、14项AC双射、6个pending切片的无环依赖检查；主设计167行、packet56行，处于既有预算内。没有运行未实现的9.9.9 validator 或把文档检查当运行时验收。
+独立复核已完成，5项发现全部解决。已将完成文档合入主工作区 .ai_state 并窄幅更新索引，旧 brainstorm 以 superseded 保留。后续实现从切片1及旧版基线测量开始，本轮不自动进入实现。
+
+最终回读通过：主目录8项输入与独立PASS所审hash一致，原生结果hash可核对，YAML/AC双射/切片依赖/索引预算和指针均有效，git diff --check通过。主目录索引10153字节，保留9.9.8运行schema；历史已入index-overflow，配置事件原有改动保留。未改发行或安装态文件，未提交或推送。
+
+## 2026-09-06 后续用户授权
+
+用户原话：直接把cc和cx的9.9.9版本输出出来，之后由Claude fable5.1查看。该授权取代设计时“本轮仅文档”的执行范围，当前进入发行候选实现；不代表安装态更新、推送或未测AC已完成。保留已审设计内容哈希；当前范围与进度以本追加记录及索引为准。
+
+- writer binding: athena999_cc_package -> 01a0764d-ed7b-72d0-aaa6-af47b5b7a5c5; worktree /Users/mi_manchi/workspace/Rlues-worktrees/athena-9.9.9-design; baseline aa0ae23; write CC 9.9.9 prompt/config docs excluding hooks and installer/VM dirs; integrator main.
+
+- writer binding: athena999_cc_writer -> 01a0764f-836c-7251-aa28-eb097e3bfa46; CC scoped docs ownership; same worktree/base; prior configured generator had no file tools and made no changes.
+
+- writer binding: athena999_cc_native -> 01a07650-a17f-7d10-b03b-9e5d4fb0930f; CC scoped docs ownership, native default role; same worktree/base; prior worker exposed no tools, no changes.
+
+- writer binding: athena999_cx_native -> 01a07651-b2d0-7f32-9be1-a2d124d3320d; CX scoped docs ownership; same worktree/base; main integrates.
+
+- writer binding: athena999_state_hooks -> 01a07652-d928-79a0-b44e-b4fbc5822452; CC/CX9.9.9 hooks + pace/scripts + dedicated state/review tests; same worktree/base; main integrates.
+
+- writer binding: athena999_vm_install -> 01a07653-9db0-7b50-a63c-7dde51848e09; both packages setup/init/migrate/vm/runtime-verify skills + dedicated tests; same worktree/base; main integrates.
+
+## 2026-09-07 Grok 核对（未安装 9.9.9）
+
+本机已装 Athena 9.9.8（`~/.claude` + `~/.codex`）。按用户要求：不安装 9.9.9；已装机器删除安装器备份；保留会话。已删除 `~/.athena/backups/athena-9.9.8-redeploy-*`，保留 `~/.athena/vm.json` 与 CC/CX 会话目录。
+
+候选包核对与补全：
+- Agent 去掉 `maxTurns`；stub 恢复 `disable-model-invocation`。
+- `REVIEW.md` 从 `.claude/` 根目录移到 `skills/athena-review/REVIEW.md`（CC skill 目录约定）。
+- 被截短的 skill 从 9.9.8 全文恢复并叠 9.9.9 增量；CX 补 `fullstack-contract`/`state-contract`。
+- VM 包内自带 `templates/vm.json.example` + `references/vm.schema.json`。
+- 新增 opt-in `/llm-as-a-verifier`（默认关，logprobs 排序，不是 ship 门禁）。
+- 安装器永不覆盖 sessions/history；已装成功后剪除更早安装器备份。
+
+`python3 vibeCoding/scripts/validate-athena-9.9.9.py`：56 PASS / 0 FAIL。未改安装态 9.9.8。用户要 Claude 审核后再决定安装。

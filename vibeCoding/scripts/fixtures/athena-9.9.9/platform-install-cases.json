@@ -1,0 +1,5 @@
+[
+  {"name": "CC-only with no CX account or config", "only": "cc", "installed": [".claude"], "absent": [".codex"]},
+  {"name": "CX-only with no CC account or config", "only": "cx", "installed": [".codex"], "absent": [".claude"]},
+  {"name": "Both platforms explicitly selected", "only": "both", "installed": [".claude", ".codex"], "absent": []}
+]
