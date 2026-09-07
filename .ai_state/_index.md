@@ -15,7 +15,7 @@ skip_runtime_verify: false        # v9.8.0: true 跳过运行时验证 (纯库/�
 
 # === 路由审议 (v9.9.6) ===
 route_confidence: 0.98  # 0-1, 主 agent 路由决策摘要中的置信度 (末条 route_history 的置信度)
-route_history: ["2026-07-14 System: repair Athena 9.9.3 review findings, full regression, formal review, merge and publish", "2026-07-25 System+roadmap: research-led Athena 9.9.6 prompt architecture refresh for Claude Code and Codex", "2026-07-25 System impl: user authorized Claude review repairs directly in main checkout without worktree", "2026-07-28 System impl 范围扩张 (非 re-route): 用户拍板把 2026-07-27-hotfix-gate-contract 的 A-E 五条并入本 sprint 作 →index-overflow.md#rh-0", "2026-07-28 System impl 红区降级 (用户显式批准): spawn generator 执行 G1-G5 被 subagent-worktree-check.cjs 无条件 block →index-overflow.md#rh-1", "2026-07-29 System impl: 用户授权 hotfix2 W35-W40 安装态同步、真实 sprint 采数、validator 收口与 main 推送；canoni →index-overflow.md#rh-2", "2026-08-27 System: Athena 9.9.8 Thin PACE Control Plane；一次原生 review、hook 红黄绿、有界 ai_state；VM/LaaV 仅保留 o →index-overflow.md#rh-3", "2026-09-06 System/brainstorm: CC/CX next release; efficiency, parallel and fullstack; proposal only; conf=0.96", "2026-09-06 System/design: 9.9.9; PACE+state; single-platform base; 3 goals; design reviewed; impl pending; conf=0.98", "2026-09-06 System/impl: user authorized CC/CX 9.9.9 candidate packages for Claude review; same design scope; conf=0.98"]  # re-route ≤10, item ≤160B
+route_history: ["2026-07-14 System: repair Athena 9.9.3 review findings, full regression, formal review, merge and publish", "2026-07-25 System+roadmap: research-led Athena 9.9.6 prompt architecture refresh for Claude Code and Codex", "2026-07-25 System impl: user authorized Claude review repairs directly in main checkout without worktree", "2026-07-28 System impl 范围扩张 (非 re-route): 用户拍板把 2026-07-27-hotfix-gate-contract 的 A-E 五条并入本 sprint 作 →index-overflow.md#rh-0", "2026-07-28 System impl 红区降级 (用户显式批准): spawn generator 执行 G1-G5 被 subagent-worktree-check.cjs 无条件 block →index-overflow.md#rh-1", "2026-07-29 System impl: 用户授权 hotfix2 W35-W40 安装态同步、真实 sprint 采数、validator 收口与 main 推送；canoni →index-overflow.md#rh-2", "2026-08-27 System: Athena 9.9.8 Thin PACE Control Plane；一次原生 review、hook 红黄绿、有界 ai_state；VM/LaaV 仅保留 o →index-overflow.md#rh-3", "2026-09-06 System/brainstorm: CC/CX next release; efficiency, parallel and fullstack; proposal only; conf=0.96", "2026-09-06 System/design: 9.9.9; PACE+state; single-platform base; 3 goals; design reviewed; impl pending; conf=0.98", "2026-09-07 System audit: Grok aeb1da6; standalone assets pass, contract/code gaps reproduced; no install; conf=0.99"]  # re-route ≤10, item ≤160B
 plan_model: "fable"               # "" | "fable" — System/Refactor 的 plan/design 审议切 fable-5 (贵, opt-in)
 
 # === 平台与版本 ===
@@ -59,7 +59,7 @@ counts:
   refactors_count: 0
   systems_count: 2
   requirements_count: 1
-  reviews_count: 8
+  reviews_count: 9
   cleanup_count: 1
   compound:
     learning: 5
@@ -70,7 +70,7 @@ counts:
 # === Pointers (指向最新相关文件) ===
 pointers:
   latest_design: "sprints/2026-09-06-athena-9-9-9/design.md"
-  latest_review: "sprints/2026-09-06-athena-9-9-9/reviews/design-review.md"
+  latest_review: "sprints/2026-09-06-athena-9-9-9/reviews/2026-09-07-completeness-audit.md"
   latest_cleanup: "sprints/2026-08-27-athena-9-9-8/cleanup-pass.md"
   latest_brainstorm: "sprints/2026-09-06-athena-next-version/brainstorm.md"
   latest_decisions: ["compound/2026-08-27-decision-retire-local-telemetry-collection.md", "compound/2026-07-28-decision-close-prompt-engineering-direction.md", "compound/2026-07-13-decision-quantum-7-to-2-consolidation.md", "compound/2026-07-13-decision-index-field-audit.md", "compound/2026-07-08-decision-token-usage-null-and-subagent-stop.md"]
@@ -110,6 +110,8 @@ fingerprint: ""
 
 ## 当前状态
 
+- 2026-09-07 audit: 首装资产通过；核心缺陷仍在，见latest_review；不安装。
+- 2026-09-07 impl: 已合入审查绑定/init 并发/Gradle 分类/LaaV 评分修复；validator 58 PASS；未安装。
 - 2026-09-07 impl: 9.9.9 候选包已核对补全（无 maxTurns、REVIEW 进 skill、LaaV opt-in、VM json 入包）；未安装；待 Claude 审核。
 - 2026-09-06 design: 用户授权生成CC/CX 9.9.9候选包；设计已复核，进入实现。
 - 2026-09-06 VM: SSH可达RHEL10.2；仅证明传输，项目服务待验证。

@@ -28,7 +28,7 @@ DDL SQL。本 skill **系统无关**：数据库类型、命名、审计字段�
 
 1. 定位 Convention Pack。通用约定读 `references/backend-db-convention-pack.md`；若
    `scaffold_id=quantum-backend` 或目标 pack 路径匹配 `quantum-backend/docs/ai/convention-pack`，
-   再读 `references/quantum-backend-adapter.md`。
+   再读 `references/quantum-backend-db-adapter.md`。
 2. 运行 `python3 scripts/check_backend_pack.py <convention-pack-dir> --profile db`，缺必需文件/模板先停机补约定。
 3. 读取 Convention Pack，确定数据库方言、迁移目录、命名规则和安全默认项。
 4. 产出表设计文档：业务语义、字段、类型、约束、索引、权限归属、数据域、兼容性说明。
@@ -55,10 +55,10 @@ DDL SQL。本 skill **系统无关**：数据库类型、命名、审计字段�
 - design stage：冻结表语义和 schema 评审材料。
 - impl stage：生成本地可验证的 DDL 或 migration。
 - runtime-verify stage：按声明环境验证 schema 可执行。
-- review stage：spec-compliance 核对需求字段、权限归属和 DDL 一致性。
+- review stage：一次独立 review 核对需求字段、权限归属和 DDL 一致性。不调度 spec-compliance。
 
 ## References
 
 - `references/backend-db-convention-pack.md`: 后端 DB Convention Pack contract。
-- `references/quantum-backend-adapter.md`: quantum-backend 的 DB 适配器。
+- `references/quantum-backend-db-adapter.md`: quantum-backend 的 DB 适配器。
 - `scripts/check_backend_pack.py`: 后端 pack 结构和模板完整性校验脚本。

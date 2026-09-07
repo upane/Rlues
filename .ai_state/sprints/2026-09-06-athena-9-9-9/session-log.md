@@ -71,3 +71,16 @@ implementation_status: in-progress
 - 安装器永不覆盖 sessions/history；已装成功后剪除更早安装器备份。
 
 `python3 vibeCoding/scripts/validate-athena-9.9.9.py`：56 PASS / 0 FAIL。未改安装态 9.9.8。用户要 Claude 审核后再决定安装。
+
+## 2026-09-07 合入 Codex 核查缺陷（仍未安装）
+
+按 completeness-audit 顺序修确定缺陷，未安装 9.9.9：
+- review accept 核对原生 frontmatter 的 run/mode/packet；错声明拒绝，正文引用不误伤。
+- init 探测结束后用共享锁合并最新 index，不覆盖并发 stage/正文。
+- cleanup-pass 不再要求 polish 阶段删 worktree。
+- Pre/Post 验证命令共用同一分类器（含 Gradle）。
+- CX 安装示例改为 `--only cx`；quantum playbook 去掉退役角色与错误 adapter。
+- LaaV 缺有效 logprobs / 全员无法评分时 skip，不退回离散分、不标 ranked。
+- 补 `configure-vm.py` 与 SSH alias。
+
+`python3 -B vibeCoding/scripts/validate-athena-9.9.9.py`：58 PASS / 0 FAIL。仍未跑 E1–E3 与原生 CLI 全链路。

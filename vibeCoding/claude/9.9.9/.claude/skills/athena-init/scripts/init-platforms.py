@@ -2,12 +2,14 @@
 """Initialize Athena 9.9.9 platform intent; probe only selected local CLI versions."""
 from datetime import datetime, timezone
 import argparse
+import importlib.util
 import json
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 
 
@@ -37,7 +39,82 @@ def replace_field(text, name, value):
     pattern = r'^' + re.escape(name) + r':[^\n]*$'
     if re.search(pattern, text, re.M):
         return re.sub(pattern, lambda match: line, text, count=1, flags=re.M)
-    return text.replace('---\n', '---\n' + line + '\n', 1)
+    return line + '\n' + text
+
+
+def frontmatter(text):
+    match = re.match(r'\A---[^\S\n]*\n(.*?)(?=^---[^\S\n]*(?:\n|$))', text, re.M | re.S)
+    if not match:
+        raise ValueError('index needs valid frontmatter; existing content preserved')
+    return text[:match.start(1)], match.group(1), text[match.end(1):]
+
+
+def intent(text):
+    if text is None:
+        return None
+    _, body, _ = frontmatter(text)
+    match = re.search(r'^platforms_enabled:\s*(\[[^\n]*?\])', body, re.M)
+    return normalize(json.loads(match.group(1))) if match else None
+
+
+def merge_latest(request, latest):
+    """Called with the native shared index lock held, after all CLI probes finish."""
+    selected = request['selected']
+    if request['existed']:
+        if latest is None:
+            raise ValueError('index removed during probe; initialization must be retried')
+        if intent(latest) != request['observed_intent']:
+            raise ValueError('platform intent changed during probe; retry for the current selection')
+    elif latest is not None and intent(latest) != selected:
+        raise ValueError('platform intent changed during initial probe; current index preserved')
+    fresh = latest is None
+    prefix, body, suffix = frontmatter(request['template'] if fresh else latest)
+    body = replace_field(body, 'platforms_enabled', selected)
+    for kind in ['cc', 'cx']:
+        body = replace_field(body, kind + '_version', request['capabilities'].get(kind, {}).get('version', ''))
+    # Capability fields belong to platform_features, never markdown examples or other sections.
+    def clear_unobserved(match):
+        block = match.group(2)
+        for kind in ['cc', 'cx']:
+            if fresh or kind not in selected:
+                block = re.sub(r'^([ \t]+' + kind + r'_[A-Za-z0-9_]+:)[ \t]*(?:true|false)([^\n]*)$',
+                               lambda field: field.group(1) + ' false' + field.group(2), block, flags=re.M)
+        return match.group(1) + block
+    body = re.sub(r'(^platform_features:[^\n]*\n)((?:[ \t]+[^\n]*(?:\n|$)|\n)*)',
+                  clear_unobserved, body, flags=re.M)
+    return prefix + body + suffix
+
+
+def commit_discovery(index, request):
+    script = Path(__file__).resolve()
+    index.parent.mkdir(parents=True, exist_ok=True)
+    if '.claude' in script.parts:
+        # CC keeps its existing native Node lock. Python is used only by this init CLI.
+        result = subprocess.run(['node', str(script.with_name('commit-index.cjs')),
+                   str(script.parents[3] / 'hooks/_index-io.cjs'), str(index), sys.executable, str(script)],
+                   input=json.dumps(request), capture_output=True, text=True)
+        if result.returncode:
+            raise ValueError(result.stderr.strip() or 'native index commit failed; original preserved')
+        return
+    package = script.parents[3]
+    hooks = package / 'hooks' if package.name == '.codex' else Path(os.environ.get('CODEX_HOME', str(Path.home() / '.codex'))) / 'hooks'
+    module_path = hooks / '_index_io.py'
+    if not module_path.is_file():
+        raise ValueError('native shared index writer unavailable; no unlocked fallback')
+    spec = importlib.util.spec_from_file_location('athena_init_index_io', module_path)
+    writer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(writer)
+    if not writer.acquire(index):
+        raise ValueError('shared index lock unavailable; initialization did not commit')
+    try:
+        latest = index.read_text() if index.exists() else None
+        updated = merge_latest(request, latest)
+        writer.write_atomic(index, updated)
+        cache = index.parent / '.runtime/platform-capabilities.json'
+        cache.parent.mkdir(exist_ok=True)
+        writer.write_atomic(cache, json.dumps(request['capabilities'], indent=2) + '\n')
+    finally:
+        writer.release(index)
 
 
 def main():
@@ -52,12 +129,12 @@ def main():
         parser.error('Athena requires a Git repository')
     state = repo / '.ai_state'
     index = state / '_index.md'
-    text = index.read_text() if index.exists() else args.template.read_text()
-    selected = args.platforms
-    if selected is None and index.exists():
-        match = re.search(r'^platforms_enabled:\s*(\[[^\n]*?\])', text, re.M)
-        if match:
-            selected = json.loads(match.group(1))
+    try:
+        text = index.read_text()
+    except FileNotFoundError:
+        text = None
+    observed_intent = intent(text)
+    selected = args.platforms if args.platforms is not None else observed_intent
     if selected is None:
         selected = 'cc' if '.claude' in Path(__file__).parts else 'cx'
     selected = normalize(selected)
@@ -95,20 +172,9 @@ def main():
         capabilities[kind] = {'version': version, 'status': status, 'executable': marker,
                               'checked_at': datetime.now(timezone.utc).isoformat(),
                               'native_capabilities': 'require current interface observation; version alone is insufficient'}
-    updated = replace_field(text, 'platforms_enabled', selected)
-    if not index.exists():
-        # Template capability examples are not observations of the current native interface.
-        updated = re.sub(r'^(\s+(?:cc|cx)_[A-Za-z0-9_]+:)\s*(?:true|false)([^\n]*)$',
-                         lambda match: match.group(1) + ' false' + match.group(2), updated, flags=re.M)
-    for kind in ['cc', 'cx']:
-        if kind not in selected:
-            updated = re.sub(r'^(\s+' + kind + r'_[A-Za-z0-9_]+:)\s*(?:true|false)([^\n]*)$',
-                             lambda match: match.group(1) + ' false' + match.group(2), updated, flags=re.M)
-        updated = replace_field(updated, kind + '_version', capabilities.get(kind, {}).get('version', ''))
-    if not index.exists() or updated != text:
-        atomic(index, updated)
-    if capabilities != cache:
-        atomic(cache_path, json.dumps(capabilities, indent=2) + '\n')
+    commit_discovery(index, {'existed': text is not None, 'observed_intent': observed_intent,
+                            'selected': selected, 'capabilities': capabilities,
+                            'template': args.template.read_text() if text is None else None})
     for name in ['sprints', 'roadmap', 'architecture', 'requirements', 'compound']:
         (state / name).mkdir(exist_ok=True)
     # Local Git exclusion keeps the rebuildable cache out of commits without touching project policy.
@@ -124,4 +190,12 @@ def main():
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    try:
+        if sys.argv[1:] == ['_merge_locked']:
+            request = json.load(sys.stdin)
+            print(json.dumps({'content': merge_latest(request, request['latest'])}))
+        else:
+            raise SystemExit(main())
+    except (OSError, ValueError) as exc:
+        print('init failed: ' + str(exc), file=sys.stderr)
+        raise SystemExit(2)

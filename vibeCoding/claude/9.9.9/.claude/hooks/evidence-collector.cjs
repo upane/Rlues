@@ -43,18 +43,6 @@ function classifyEvent(eventName) {
   return "unknown";
 }
 
-function isValidationCommand(command) {
-  const normalized = String(command || "").trim().toLowerCase();
-  // Real validation commands are frequently run with a leading KEY=VAL env
-  // prefix (e.g. "PYTHONDONTWRITEBYTECODE=1 python3 -m pytest", the exact form
-  // runtime-verify.md records); tolerate any number of such prefixes at the
-  // start of the command or right after a shell separator.
-  const envPrefix = "(?:[a-z_][a-z0-9_]*=\\S+\\s+)*";
-  return new RegExp(
-    `(^|[;&|]\\s*)${envPrefix}(?:python3?\\s+-m\\s+(?:pytest|unittest)|pytest|npm\\s+(?:test|run\\s+(?:test|build|lint|typecheck|check))|pnpm\\s+(?:test|run\\s+(?:test|build|lint|typecheck|check))|yarn\\s+(?:test|run\\s+(?:test|build|lint|typecheck|check))|bun\\s+(?:test|run\\s+(?:test|build|lint|typecheck|check))|cargo\\s+(?:test|build|check|clippy)|go\\s+(?:test|build|vet)|mvn\\s+(?:test|verify|compile)|\\.\\/gradlew\\s+(?:test|build)|node\\s+--check|git\\s+diff\\s+--check)\\b`,
-  ).test(normalized);
-}
-
 function yamlString(value) {
   return JSON.stringify(String(value || ""));
 }
@@ -101,7 +89,7 @@ function main() {
     // 普通 Bash/Edit/MCP 不再逐行记账 (写放大主源, 无核心 gate 消费者);
     // re-route 文件数已改由 index-updater 用 git 现场变更集计算 (W36)。
     // A successful file write is useful trace data, but it is not validation.
-    if (tool === "Bash" && toolUseId && isValidationCommand(command)) {
+    if (tool === "Bash" && toolUseId && binding.classifyValidation(command)) {
       const sprintDir = path.join(aiState, "sprints", sprintSlug);
       fs.mkdirSync(sprintDir, { recursive: true });
       // F3 (2026-07-29, W35): command 必须脱敏后落盘 — redact 原只盖 error 字段,

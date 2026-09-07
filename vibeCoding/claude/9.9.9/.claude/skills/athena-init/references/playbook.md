@@ -23,29 +23,9 @@ fi
 git rev-parse --git-dir >/dev/null 2>&1 || { echo "Athena 需要 git 仓库"; exit 1; }
 ```
 
-### Step 2: 探测平台 (cc / cx / ag 可用性)
+### Step 2: 只探测用户选择的本端
 
-```bash
-# CC 始终可用 (因为我们就在 CC 里跑)
-CC_VERSION=$(claude --version 2>/dev/null || echo "claude-code (unknown)")
-
-# CX
-if command -v codex >/dev/null 2>&1; then
-  CX_VERSION=$(codex --version 2>/dev/null)
-  CX_AVAILABLE=true
-else
-  CX_VERSION=""
-  CX_AVAILABLE=false
-fi
-
-# AG (Antigravity)
-if command -v agy >/dev/null 2>&1; then
-  AG_VERSION=$(agy --version 2>/dev/null || echo "agy (unknown)")
-  AG_CALLABLE=true
-else
-  AG_CALLABLE=false
-fi
-```
+不要手写双端探测。调用 `scripts/init-platforms.py`，用 `--platforms cc` 或 `--platforms cx`。未选端不得跑其 `--version`、不得读其账号配置。Antigravity 仅在用户明确选择时探测。
 
 ### Step 3: 探测工具
 

@@ -16,6 +16,7 @@ CC = ROOT / 'vibeCoding/claude/9.9.9/.claude/skills'
 RUNTIME = CX / 'athena-vm/scripts/runtime-run.py'
 SETUP = CX / 'athena-setup/scripts/setup-athena.py'
 INIT = CX / 'athena-init/scripts/init-platforms.py'
+CONFIGURE = CX / 'athena-vm/scripts/configure-vm.py'
 
 
 class Fixture(unittest.TestCase):
@@ -391,6 +392,281 @@ class InstallTests(Fixture):
         result = self.setup('cx', package)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(other.read_text(), 'not even valid JSON; unselected')
+
+
+class InitConcurrencyTests(Fixture):
+    """Use actual native index writers while CLI discovery is paused."""
+
+    def writer(self, index, content, use_node):
+        if use_node:
+            command = ['node', '-e', 'const fs=require("fs"), io=require(process.argv[1]); '
+                       'if(io.update(process.argv[2],()=>fs.readFileSync(0,"utf8"))===null) process.exit(2);',
+                       str(CC.parents[0] / 'hooks/_index-io.cjs'), str(index)]
+        else:
+            command = [sys.executable, '-c', 'import sys; from pathlib import Path; '
+                       'sys.path.insert(0,sys.argv[1]); import _index_io; '
+                       'result=_index_io.update(Path(sys.argv[2]),lambda _:sys.stdin.read()); '
+                       'raise SystemExit(2 if result is None else 0)',
+                       str(CX.parents[0] / 'hooks'), str(index)]
+        result = subprocess.run(command, input=content, capture_output=True, text=True, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def paused_init(self, repo, script, selected):
+        binary = self.base / 'bin'
+        binary.mkdir(exist_ok=True)
+        started, resume = self.base / 'started', self.base / 'resume'
+        started.unlink(missing_ok=True)
+        resume.unlink(missing_ok=True)
+        executable = binary / ('claude' if selected == 'cc' else 'codex')
+        executable.write_text('#!' + sys.executable + '\nfrom pathlib import Path\nimport time\n'
+             f'Path({str(started)!r}).touch()\nend=time.monotonic()+10\n'
+             f'while not Path({str(resume)!r}).exists() and time.monotonic()<end: time.sleep(0.01)\n'
+             'print("fixture-cli 1.2.3")\n')
+        executable.chmod(0o755)
+        template = self.base / 'template.md'
+        template.write_text('---\nplatforms_enabled: ["both"]\nstage: "impl"\n---\n')
+        process = subprocess.Popen([sys.executable, str(script), '--repo', str(repo), '--platforms',
+                       selected, '--template', str(template), '--refresh'], stdout=subprocess.PIPE,
+                       stderr=subprocess.PIPE, text=True,
+                       env=dict(self.env, PATH=str(binary) + os.pathsep + self.env['PATH']))
+        self.addCleanup(lambda: process.kill() if process.poll() is None else None)
+        deadline = time.monotonic() + 5
+        while not started.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(started.exists(), 'init never reached selected CLI probe')
+        return process, resume
+
+    def test_probe_does_not_overwrite_concurrent_stage_or_body(self):
+        repo = self.repo()
+        index = repo / '.ai_state/_index.md'
+        index.parent.mkdir()
+        for selected, script in [('cx', INIT), ('cc', CC / 'athena-init/scripts/init-platforms.py')]:
+            with self.subTest(platform=selected):
+                content = '---\nplatforms_enabled: ["' + selected + '"]\nstage: "impl"\n---\n'
+                index.write_text(content)
+                process, resume = self.paused_init(repo, script, selected)
+                latest = content.replace('"impl"', '"review"') + '\nplatform_features:\n  cc_body_example: true\n'
+                self.writer(index, latest, use_node=selected == 'cx')
+                resume.touch()
+                stdout, stderr = process.communicate(timeout=5)
+                self.assertEqual(process.returncode, 0, stdout + stderr)
+                actual = index.read_text()
+                self.assertIn('stage: "review"', actual)
+                self.assertIn('  cc_body_example: true', actual)
+                self.assertIn(selected + '_version: "fixture-cli 1.2.3"', actual)
+
+    def test_changed_intent_rejects_probe_and_preserves_new_cache(self):
+        repo = self.repo()
+        index = repo / '.ai_state/_index.md'
+        index.parent.mkdir()
+        cache = index.parent / '.runtime/platform-capabilities.json'
+        for selected, script in [('cx', INIT), ('cc', CC / 'athena-init/scripts/init-platforms.py')]:
+            with self.subTest(platform=selected):
+                content = '---\nplatforms_enabled: ["' + selected + '"]\nstage: "impl"\n---\n'
+                index.write_text(content)
+                process, resume = self.paused_init(repo, script, selected)
+                other = 'cc' if selected == 'cx' else 'cx'
+                latest = content.replace('["' + selected + '"]', '["' + other + '"]').replace('"impl"', '"review"')
+                self.writer(index, latest, use_node=selected == 'cx')
+                cache.parent.mkdir(exist_ok=True)
+                expected_cache = json.dumps({other: {'version': 'newer observation'}})
+                cache.write_text(expected_cache)
+                resume.touch()
+                stdout, stderr = process.communicate(timeout=5)
+                self.assertNotEqual(process.returncode, 0, stdout + stderr)
+                self.assertIn('intent changed', stderr)
+                self.assertEqual(index.read_text(), latest)
+                self.assertEqual(cache.read_text(), expected_cache)
+
+    def test_first_creation_preserves_index_created_during_probe(self):
+        repo = self.repo()
+        for selected, script in [('cx', INIT), ('cc', CC / 'athena-init/scripts/init-platforms.py')]:
+            with self.subTest(platform=selected):
+                import shutil
+                shutil.rmtree(repo / '.ai_state', ignore_errors=True)
+                process, resume = self.paused_init(repo, script, selected)
+                index = repo / '.ai_state/_index.md'
+                index.parent.mkdir(exist_ok=True)
+                # Another initializer commits through the actual native lock.
+                index.write_text('---\nplatforms_enabled: ["' + selected + '"]\n---\n')
+                latest = '---\nplatforms_enabled: ["' + selected + '"]\nstage: "review"\ncustom: "keep"\n---\n'
+                self.writer(index, latest, use_node=selected == 'cx')
+                resume.touch()
+                stdout, stderr = process.communicate(timeout=5)
+                self.assertEqual(process.returncode, 0, stdout + stderr)
+                self.assertIn('stage: "review"', index.read_text())
+                self.assertIn('custom: "keep"', index.read_text())
+
+    def test_shared_lock_timeout_is_nonzero_and_does_not_create_or_overwrite(self):
+        repo = self.repo()
+        index = repo / '.ai_state/_index.md'
+        index.parent.mkdir()
+        template = self.base / 'template.md'
+        template.write_text('---\nplatforms_enabled: ["both"]\n---\n')
+        lock = index.with_name('_index.md.lock')
+        lock.write_text('held by another writer')
+        for script in [INIT, CC / 'athena-init/scripts/init-platforms.py']:
+            for existing in [False, True]:
+                with self.subTest(script=str(script), existing=existing):
+                    if existing:
+                        index.write_text('---\nstage: "review"\nplatforms_enabled: ["cx"]\n---\n')
+                    else:
+                        index.unlink(missing_ok=True)
+                    before = index.read_bytes() if existing else None
+                    result = self.cli(script, '--repo', repo, '--platforms', 'cx', '--template', template)
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn('lock', result.stderr)
+                    self.assertEqual(index.read_bytes() if index.exists() else None, before)
+                    self.assertFalse((index.parent / '.runtime/platform-capabilities.json').exists())
+                    self.assertEqual(lock.read_text(), 'held by another writer')
+
+    def test_installed_cx_uses_own_native_writer_and_repeat_is_zero_write(self):
+        import shutil
+        repo = self.repo()
+        installed = self.home / '.agents/skills/athena-init/scripts/init-platforms.py'
+        installed.parent.mkdir(parents=True)
+        shutil.copy2(INIT, installed)
+        hooks = self.home / '.codex/hooks'
+        hooks.mkdir(parents=True)
+        shutil.copy2(CX.parents[0] / 'hooks/_index_io.py', hooks / '_index_io.py')
+        template = self.base / 'template.md'
+        template.write_text('---\nplatforms_enabled: ["both"]\n---\n')
+        env = dict(self.env, CODEX_HOME=str(self.home / '.codex'))
+        result = self.cli(installed, '--repo', repo, '--platforms', 'cx', '--template', template, env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        paths = [repo / '.ai_state/_index.md', repo / '.ai_state/.runtime/platform-capabilities.json']
+        before = [(path.read_bytes(), path.stat().st_mtime_ns) for path in paths]
+        result = self.cli(installed, '--repo', repo, env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([(path.read_bytes(), path.stat().st_mtime_ns) for path in paths], before)
+
+
+class FirstUseTests(Fixture):
+    def fake_binaries(self):
+        binary = self.base / 'bin'
+        binary.mkdir(exist_ok=True)
+        for name in ['claude', 'codex']:
+            path = binary / name
+            path.write_text('#!/bin/sh\necho fixture-cli-1.0\n')
+            path.chmod(0o755)
+        return dict(self.env, PATH=str(binary) + os.pathsep + self.env['PATH'])
+
+    def test_standalone_package_without_old_release_installs_and_initializes(self):
+        import shutil
+        for kind, source in [('cc', CC.parent), ('cx', CX.parent)]:
+            with self.subTest(platform=kind):
+                isolated = self.base / ('standalone-' + kind)
+                package = isolated / source.name
+                shutil.copytree(source, package, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+                target_home = isolated / 'first-home'
+                target_home.mkdir()
+                history = target_home / source.name / 'sessions/prior.jsonl'
+                history.parent.mkdir(parents=True)
+                history.write_text('existing conversation\n')
+                third_party = target_home / ('.claude/skills/custom' if kind == 'cc' else '.agents/skills/custom') / 'SKILL.md'
+                third_party.parent.mkdir(parents=True)
+                third_party.write_text('user skill\n')
+                env = dict(self.fake_binaries(), HOME=str(target_home), CODEX_HOME=str(target_home / '.codex'))
+                env.pop('ATHENA_CC_PKG', None)
+                env.pop('ATHENA_CX_PKG', None)
+                result = subprocess.run([sys.executable, str(package / 'skills/athena-setup/scripts/setup-athena.py'),
+                            '--home', str(target_home), '--only', kind, '--' + kind + '-package', str(package)],
+                            cwd=isolated, env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn(str(ROOT), result.stdout)
+                self.assertFalse((target_home / '.athena/vm.json').exists())
+                self.assertEqual(history.read_text(), 'existing conversation\n')
+                self.assertEqual(third_party.read_text(), 'user skill\n')
+                installed_skills = target_home / ('.claude/skills' if kind == 'cc' else '.agents/skills')
+                # Inspect all shipped helper/reference/template bytes, not just SKILL.md names.
+                for asset in (package / 'skills').rglob('*'):
+                    if asset.is_file():
+                        installed = installed_skills / asset.relative_to(package / 'skills')
+                        self.assertTrue(installed.is_file(), str(installed))
+                        self.assertEqual(installed.read_bytes(), asset.read_bytes())
+                project = isolated / 'project'
+                project.mkdir()
+                subprocess.run(['git', 'init', '-q'], cwd=project, env=env, check=True)
+                result = subprocess.run([sys.executable, str(installed_skills / 'athena-init/scripts/init-platforms.py'),
+                              '--repo', str(project), '--platforms', kind], cwd=project, env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('platforms_enabled: ["' + kind + '"]', (project / '.ai_state/_index.md').read_text())
+                result = subprocess.run([sys.executable, str(installed_skills / 'athena-vm/scripts/runtime-run.py'),
+                              'doctor', '--runner', 'local'], cwd=project, env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)['scenario']['status'], 'not_run')
+                result = subprocess.run([sys.executable, str(installed_skills / 'athena-vm/scripts/configure-vm.py'),
+                              '--help'], cwd=project, env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_missing_vm_config_can_be_created_without_claiming_transport(self):
+        result = self.cli(CONFIGURE, '--name', 'dev', '--host', 'example.invalid', '--user', 'fixture',
+                          '--workdir', '/tmp/athena-fixture')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        path = self.home / '.athena/vm.json'
+        data = json.loads(path.read_text())
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(data['version'], 1)
+        self.assertEqual(data['vms'][0]['auth'], {'method': 'key'})
+        summary = json.loads(result.stdout)
+        self.assertEqual(summary['configured']['status'], 'passed')
+        self.assertEqual(summary['transport']['status'], 'not_run')
+        self.assertEqual(summary['scenario']['status'], 'not_run')
+        before = path.read_bytes()
+        result = self.cli(CONFIGURE, '--name', 'dev', '--host', 'changed.invalid', '--user', 'fixture',
+                          '--workdir', '/tmp/changed')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_alias_configuration_preserves_other_targets_and_uses_alias(self):
+        config = self.home / '.athena/vm.json'
+        config.parent.mkdir()
+        existing = {'version': 1, 'custom': {'keep': True}, 'vms': [{'name': 'other', 'custom': 'keep'}]}
+        config.write_text(json.dumps(existing))
+        config.chmod(0o600)
+        binary = self.base / 'bin'
+        binary.mkdir()
+        calls = self.base / 'ssh-calls'
+        fake_ssh = binary / 'ssh'
+        fake_ssh.write_text('#!' + sys.executable + '\nimport sys,json\nfrom pathlib import Path\n'
+                    f'with Path({str(calls)!r}).open("a") as f: f.write(json.dumps(sys.argv[1:])+"\\n")\n'
+                    'if sys.argv[1:]==["-G","my-existing-alias"]:\n'
+                    ' print("hostname example.invalid\\nuser fixture\\nport 2222\\nidentityfile ~/.ssh/existing")\n'
+                    'else:\n print(json.dumps({"system":"Linux","release":"fixture","machine":"x86_64","python":"3.12"}))\n')
+        fake_ssh.chmod(0o755)
+        env = dict(self.env, PATH=str(binary) + os.pathsep + self.env['PATH'])
+        result = self.cli(CONFIGURE, '--name', 'dev', '--ssh-alias', 'my-existing-alias',
+                          '--workdir', '/tmp/athena-fixture', env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        actual = json.loads(config.read_text())
+        self.assertEqual(actual['custom'], existing['custom'])
+        self.assertEqual(actual['vms'][0], existing['vms'][0])
+        target = actual['vms'][1]
+        self.assertEqual(target['ssh_alias'], 'my-existing-alias')
+        self.assertEqual(target['host'], 'example.invalid')
+        self.assertEqual(target['user'], 'fixture')
+        self.assertEqual(target['port'], 2222)
+        self.assertEqual(len(calls.read_text().splitlines()), 1)
+        result = self.cli(RUNTIME, 'doctor', '--runner', 'ssh', '--vm', 'dev', env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        ssh_args = json.loads(calls.read_text().splitlines()[-1])
+        self.assertEqual(ssh_args[-2], 'my-existing-alias')
+        self.assertNotIn('-p', ssh_args)
+
+    def test_configure_dry_run_and_invalid_existing_secret_are_zero_write(self):
+        arguments = ['--name', 'dev', '--host', 'example.invalid', '--user', 'fixture', '--workdir', '/tmp/run']
+        result = self.cli(CONFIGURE, *arguments, '--dry-run')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.home / '.athena').exists())
+        config = self.home / '.athena/vm.json'
+        config.parent.mkdir()
+        original = json.dumps({'version': 1, 'vms': [{'name': 'old', 'password': 'do-not-print-me'}]})
+        config.write_text(original)
+        config.chmod(0o600)
+        result = self.cli(CONFIGURE, *arguments)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('do-not-print-me', result.stdout + result.stderr)
+        self.assertEqual(config.read_text(), original)
 
 
 if __name__ == '__main__':

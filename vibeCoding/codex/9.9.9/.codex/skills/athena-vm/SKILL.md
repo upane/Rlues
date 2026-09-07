@@ -5,7 +5,7 @@ description: 把用户虚拟机注册为 runtime-verify 的真实环境。需要
 
 # /athena-vm — VM 运行时接入 (v9.9.9)
 
-真实入口：`scripts/runtime-run.py snapshot|doctor|run`。使用和输出协议见 `references/playbook.md`。配置存在、SSH 可达、项目场景 ready 是不同事实。单端 CC 或 CX 都可独立调用；VM 是项目合同选择的环境，不是全局门禁。
+真实入口：`scripts/configure-vm.py` 写私有 `~/.athena/vm.json`；`scripts/runtime-run.py snapshot|doctor|run` 执行验证。使用和输出协议见 `references/playbook.md`。配置存在、SSH 可达、项目场景 ready 是不同事实。单端 CC 或 CX 都可独立调用；VM 是项目合同选择的环境，不是全局门禁。
 
 ## 为什么存在
 

@@ -16,6 +16,60 @@ from pathlib import Path
 from _input_binding import canonical, context, digest, git, snapshot
 from _index_io import acquire, release, update, write_atomic
 
+NATIVE_BINDINGS = {
+    'review_run_id':'review_run_id', 'mode':'mode', 'base_commit':'base_commit',
+    'packet_sha256':'packet_sha256', 'reviewed_packet_sha256':'packet_sha256',
+    'input_manifest_sha256':'input_manifest_sha256', 'reviewed_diff_sha256':'reviewed_diff_sha256',
+}
+
+def delivery_gate():
+    spec = importlib.util.spec_from_file_location('athena_delivery_gate',Path(__file__).with_name('delivery-gate.py'))
+    gate = importlib.util.module_from_spec(spec); spec.loader.exec_module(gate)
+    return gate
+
+def validate_native_metadata(output: str, prepared: dict, root: Path) -> None:
+    """Absent metadata may be enveloped; contradictory native claims may not.
+
+    Only the opening YAML frontmatter is authoritative, never quoted examples,
+    fenced snippets or references in the review body.
+    """
+    lines = output.lstrip('\ufeff\r\n').splitlines()
+    if not lines or lines[0].strip() != '---':
+        return
+    end = next((i for i in range(1,len(lines)) if lines[i].strip() == '---'),None)
+    if end is None:
+        raise ValueError('native review metadata frontmatter is not closed')
+    seen = set()
+    mappings = [m for line in lines[1:end] if (m := re.match(r'^([ \t]*)([A-Za-z0-9_.-]+)[ \t]*:[ \t]*(.*)$',line))]
+    root_indent = min((len(m.group(1)) for m in mappings),default=0)
+    for match in mappings:
+        if len(match.group(1)) != root_indent or match.group(2) not in NATIVE_BINDINGS:
+            continue
+        key,raw = match.group(2),match.group(3).strip()
+        if key in seen:
+            raise ValueError('native review metadata duplicate field: '+key)
+        seen.add(key)
+        if raw.startswith('"'):
+            value,used = json.JSONDecoder().raw_decode(raw)
+            if raw[used:].strip() and not raw[used:].lstrip().startswith('#'):
+                raise ValueError('native review metadata invalid scalar: '+key)
+        elif raw.startswith("'"):
+            quoted = re.fullmatch(r"'((?:''|[^'])*)'[ \t]*(?:#.*)?",raw)
+            if not quoted:
+                raise ValueError('native review metadata invalid scalar: '+key)
+            value = quoted.group(1).replace("''", "'")
+        else:
+            value = raw.split(' #',1)[0].strip()
+            if not value or value.startswith('#') or value.lower() == 'null' or value == '~':
+                continue
+        if value == '':
+            continue
+        expected = prepared.get(NATIVE_BINDINGS[key])
+        if key == 'reviewed_diff_sha256':
+            expected = delivery_gate().source_diff_sha256(root) if prepared['mode'] == 'implementation' else None
+        if not isinstance(value,str) or not expected or value != expected:
+            raise ValueError('native review metadata mismatch: '+key)
+
 def events(sprint: Path) -> list[dict]:
     log = sprint/'session-log.md'
     if not log.exists():
@@ -75,9 +129,7 @@ def prepare(cwd: Path, mode: str, inputs: list[str]) -> dict:
         latest = [r for r in rows if r.get('event') == 'prepared']
         if latest and not any(r.get('review_run_id') == latest[-1]['review_run_id'] and r.get('event') in {'accepted','received','superseded'} for r in rows):
             raise ValueError('review already pending; recover its receipt or explicitly supersede')
-    spec = importlib.util.spec_from_file_location('athena_delivery_gate',Path(__file__).with_name('delivery-gate.py'))
-    gate = importlib.util.module_from_spec(spec); spec.loader.exec_module(gate)
-    gate.validate_review_packet(sprint)
+    delivery_gate().validate_review_packet(sprint)
     refs = []
     if mode == 'implementation':
         if not (sprint/'evidence.yaml').is_file():
@@ -151,6 +203,7 @@ def accept(cwd: Path, run: str, receipt: Path) -> dict:
     if target != bound[0]['reviewer_target'] or status not in {'completed','complete','succeeded'} or not output.strip():
         raise ValueError('wrong target, unknown/incomplete native result, or missing output')
     assert_live(root,sprint,prepared)
+    validate_native_metadata(output,prepared,root)
     verdicts = re.findall(r'^\s*(?:VERDICT|verdict)\s*:\s*["\']?(PASS|REWORK|FAIL|CONCERNS)\b',output,re.M)
     if not verdicts:
         raise ValueError('native result has no explicit verdict')
@@ -185,9 +238,10 @@ def validate_current(root: Path, sprint: Path, review: Path) -> None:
     for ref,sha in ((bound[0]['dispatch_receipt_ref'],bound[0]['dispatch_receipt_sha256']),(row['native_output_ref'],row['native_output_sha256'])):
         if digest((sprint/ref).read_bytes()) != sha:
             raise ValueError('native receipt changed/missing')
-    target,status,_ = native_receipt(sprint/row['native_output_ref'],bound[0]['reviewer_target'])
+    target,status,output = native_receipt(sprint/row['native_output_ref'],bound[0]['reviewer_target'])
     if target != bound[0]['reviewer_target'] or target != row['reviewer_target'] or status not in {'completed','complete','succeeded'}:
         raise ValueError('native result identity/status mismatch')
+    validate_native_metadata(output,prepared,root)
 
 def main() -> int:
     parser = argparse.ArgumentParser(description='Prepare, bind and accept one native review using real saved tool-result JSON. Completed negative verdicts are retained for rework; only PASS is deliverable. No model or platform dispatch is invented.')

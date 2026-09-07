@@ -1,52 +1,46 @@
-# PACE References · Hooks & Compound (v9.9.9, Codex)
+# PACE References · Hooks & Compound (v9.9.6)
 
 ## Hook 联动
 
 | Hook 事件 | 文件 | 职责 |
 |---|---|---|
-| SessionStart (startup\|resume\|clear) | session-start.py | 注入 _index.md + stage-specific 操作提示 |
-| UserPromptSubmit | user-prompt-submit.py | 面包屑与提示预检；不启动 index-updater 扫描 (W40) |
-| PreToolUse | pre-bash-guard.py + delivery-gate.py + subagent-worktree-audit.py | 灾难命令、spec/push 门禁，以及 `spawn_agent|Agent` 红区 worktree 前置阻断 |
-| PostToolUse | evidence-collector.py + design-change-detector.py + index-updater.py (仅 Edit/Write) | validation 证据脱敏落盘；普通 Bash/MCP 不生成 raw telemetry (W35/W40) |
-| SubagentStart / SubagentStop | subagent-tracker.py + SubagentStart 的 subagent-worktree-audit.py | 仅保留生命周期与已启动 agent 的 worktree 审计；不做 token 记账 (W40) |
-| Stop | delivery-gate.py | 交付门禁；不续跑、不做 token 记账 (W35/W40) |
-| PreCompact | 未注册 (compact-snapshot.py) | 默认不复制 _index 快照 (W35) |
-| PostCompact | compact-restore.py | compact 后注回 _index.md 摘要 (v9.7.0 新) |
+| SessionStart | session-start.cjs | 注入 _index.md + stage-specific 操作提示 |
+| PreToolUse(Bash) | pre-bash-guard.cjs | 灾难命令拦截; v9.9.0 加 git push 门禁 (stage != ship 拦, 防 CC 2.1.198 worktree 自动 PR 绕过 review; 逃生 ATHENA_ALLOW_PUSH=1) |
+| PreToolUse(Agent) | subagent-worktree-check.cjs | 铁律[零写入] 红区/并行强制原生 worktree |
+| PostToolUse(Edit/Write/MultiEdit) | index-updater + evidence-collector + design-change-detector | 状态同步 / 证据收集 / design 变更标记; v9.9.0: index-updater 加 re-route 机械触发; design-change-detector 挂 if 过滤 (2.1.178+, 只在 design.md 被 Edit 时起进程, 失效有 delivery-gate mtime 兜底) |
+| Notification | notification-router.cjs | v9.9.0: agent_completed → 软提醒消费 next_action (fail-open, CC 2.1.198+; CX 无此事件, 不对称) |
+| PostToolUse(Bash) | evidence-collector | 官方成功事件 → pass; 不读 legacy tool_output/exit_code |
+| PostToolUseFailure(Bash/Agent) | evidence-collector + subagent-retry | 官方失败事件 → fail/error/interrupt/duration |
+| SubagentStart / SubagentStop | subagent-tracker.cjs | exact raw JSONL; Start 冻结 sprint, Stop 按 agent_id 回写; assignment 由主 agent握手 |
+| WorktreeCreate / WorktreeRemove | 默认不注册 | 使用 Claude Code 原生 Git worktree; 自定义 hook 仅非 Git VCS 专用 profile |
+| InstructionsLoaded / ConfigChange | config-change-audit.cjs | 只记来源/文件名, 不复制配置值 |
+| StopFailure | stop-failure-recorder.cjs | 模型/API 停止失败元数据, secret redaction |
+| Stop | delivery-gate.cjs | 交付门禁；不默认续跑 (W35/W40) |
+| PreCompact | 未注册 (compact-snapshot.cjs) | 默认不复制 _index 快照 (W35) |
+| PostCompact | compact-restore.cjs | compact 后恢复 live `_index.md` 摘要 |
 
-> CC 端另有 Notification hook (notification-router.cjs, agent_completed → 软提醒消费 next_action), CX hooks GA 事件集无 Notification — 已知不对称.
+> W35/W40: `pace-continuator.cjs`、`token-usage-collector.cjs`、`compact-snapshot.cjs` 均为未注册的历史/兼容资产，不参与默认 lifecycle。
 
-> Codex hooks 协议要点 (0.144.1):
-> - Stop 事件要求 JSON 输出 (plain text 无效); `decision:"block"` + `reason` 生成续跑提示
-> - additionalContext 放 `hookSpecificOutput` 并带 `hookEventName`
-> - PostToolUse 支持 systemMessage / continue:false / stopReason; PreToolUse 返回这些会被标 hook 失败
-> - **PreToolUse 阻断信道只有三条**: `hookSpecificOutput.permissionDecision:"deny"` + `permissionDecisionReason` / 旧式 `{"decision":"block","reason":…}` / **exit 2 且阻断原因写 stderr**。多 hook 时任一 deny 胜出; 无人决策走正常审批流; stdout 纯文本被忽略
-> - **fail-open 陷阱**: `permissionDecision:"ask"` / `continue:false` / `stopReason` 会被解析但**不支持** — Codex 标记该 hook 运行失败、报错、然后**继续执行工具调用**
-> - SubagentStart **无阻断语义** (`continue:false` 仅为兼容解析, 不阻止 subagent 启动), 只能注入 additionalContext 与留证据; 要拦 spawn 必须用 PreToolUse
-> - 输入含 `permission_mode` (default/acceptEdits/plan/dontAsk/bypassPermissions); turn 级含 `turn_id`
-> - SubagentStop 提供生命周期字段, 不提供可安全默认的命令退出码
-> - hooks 可覆盖 shell、`apply_patch` 与部分 MCP, 但实际 handler/matcher 覆盖必须实测; evidence 走降级链 (见 stages.md)
-> - 多 hook 并发执行无顺序保证
-> - hook 是流程护栏, 不是完整安全边界; OS sandbox、权限与人工确认仍负责真正隔离
-> - `subagent-retry.py` 是未注册的升级兼容清理 shim，不参与当前 PostToolUse 链，也不自动 retry
-> - 9.9.9 退役本地 token collector；默认 hooks 不注册遥测。其余未注册的兼容文件不构成可用能力证明。
-> - 异步 hook 不能阻断触发操作，也不能自动开启新 turn；红区门禁保持同步。review 仅真实异步调用才进入 await-review-result。
-> - 已启动的 worktree 违规会阻塞 ship；修复越界改动后须在对应 JSONL 行写 `resolved:true` 与非空 `resolution` 证据
->
-> 官方说明: https://learn.chatgpt.com/docs/hooks
+> v9.7.0 协议要点 [官方 code.claude.com/docs/en/hooks]:
+> - JSON 输出仅在 exit 0 时解析; exit 2 时 JSON 被忽略 → 所有 Stop hook 统一 exit 0 + 纯 JSON stdout
+> - additionalContext 放 `hookSpecificOutput` 并带 `hookEventName`; 输出上限 10,000 字符
+> - Stop 输入含 `stop_hook_active` (前一个 Stop hook 已续命) 与 `background_tasks` (2.1.145+, 后台任务状态)
+> - Stop hook 连续 block 有上限 (默认 8, env `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`); block reason 必须含明确解锁动作
 
 ## compound 联动 (铁律[复利])
 
 - plan stage 开始: 主 agent 读 `_index.pointers.latest_decisions` 列出的 5 个 `decision-*.md`
 - design stage: grep 关键词读相关 `learning-*.md` + `trick-*.md`
 - polish stage 完成: 触发 `/compound add learning` 提示
-- review 发现 P0: reviewer 触发 `/compound add learning`
+- review 发现 P0: 主 agent 根据 reviewer 返回结果触发 `/compound add learning`
 
 详: `~/.agents/skills/compound/SKILL.md`
 
 ## 项目级例外 (用户可调)
 
-保留旧 plan_critique_* 字段供兼容读取，不驱动固定轮数或退役角色。当前阶段义务见 stages.md；`skip_impl_subagent_check` 仅用于适用绿区例外，运行与架构 opt-out 不豁免 design 的 required 验收。
+9.9.8+ 作者会话不自审：`plan_critique_min_rounds` 默认 0。独立设计挑战走非作者会话的 review-packet。`skip_impl_subagent_check` 仅纯绿区微改。`skip_runtime_verify` / `skip_architecture_check` 仍可用。全部在 `_index.md` frontmatter。
 
 - `_index.skip_polish = true`: 跳过 polish (用户自负责)
 - `_index.skip_architecture_check = true`: 跳过 architecture mtime 检查
-- `plan_critique_*`：历史兼容字段，不改变当前一次独立审查合同
+- `_index.plan_critique_disabled = true`: 关闭多轮 critique
+- 不要给 agent 配置 `maxTurns`；不要把固定 critique 轮数写进热路径义务

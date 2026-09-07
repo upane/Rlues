@@ -14,7 +14,18 @@ from _index_io import write_atomic
 
 FIELDS = ('source_sha256', 'design_sha256', 'environment_sha256')
 PUBLIC_ENV = {'system', 'release', 'machine', 'os', 'arch', 'image', 'runtime', 'version', 'scenario', 'seed', 'recipe', 'required'}
-VALIDATION = re.compile(r'\b(?:pytest|unittest|(?:npm|pnpm|yarn|bun)\s+(?:test|run\s+(?:test|build|lint|typecheck|check))|cargo\s+(?:test|build|check|clippy)|go\s+(?:test|build|vet)|mvn\s+(?:test|verify)|(?:eslint|ruff|tsc)\b|node\s+--check|git\s+diff\s+--check)\b')
+_COMMAND_PREFIX = r'(?:^|[;&|]\s*)\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*(?:npx\s+)?'
+_VALIDATION_PATTERNS = [
+    ('test', r'(?:python3?\s+-m\s+(?:pytest|unittest)|pytest|unittest|(?:npm|pnpm|yarn|bun)\s+(?:test|run\s+test)|cargo\s+test|go\s+test|mvn\s+(?:test|verify)|\./gradlew\s+test)'),
+    ('lint', r'(?:eslint|prettier\s+--check|ruff|(?:npm|pnpm|yarn|bun)\s+run\s+lint|cargo\s+clippy|go\s+vet|node\s+--check|git\s+diff\s+--check)'),
+    ('typecheck', r'(?:tsc|(?:npm|pnpm|yarn|bun)\s+run\s+(?:typecheck|check)|cargo\s+check)'),
+    ('build', r'(?:(?:npm|pnpm|yarn|bun)\s+run\s+build|cargo\s+build|go\s+build|mvn\s+compile|\./gradlew\s+build|cmake\s+--build)'),
+]
+_VALIDATION_PATTERNS = [(kind,re.compile(_COMMAND_PREFIX + pattern + r'\b',re.I | re.M)) for kind,pattern in _VALIDATION_PATTERNS]
+
+def classify_validation(command: str) -> str | None:
+    """Single command classification consumed by both pre and post hooks."""
+    return next((kind for kind,pattern in _VALIDATION_PATTERNS if pattern.search(command)),None)
 
 def canonical(value) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
@@ -105,7 +116,7 @@ def pre_path(root: Path, payload) -> Path:
     return root/'.ai_state/.runtime/evidence-inputs'/(digest(ident) + '.json')
 
 def capture_before(payload) -> None:
-    if not VALIDATION.search(command_of(payload)):
+    if classify_validation(command_of(payload)) is None:
         return
     if re.search(r'(?:^|[;&|]\s*)cd\s', command_of(payload)):
         raise ValueError('use the tool workdir for validation; shell directory changes are not bound')

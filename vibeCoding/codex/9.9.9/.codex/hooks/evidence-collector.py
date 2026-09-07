@@ -22,28 +22,10 @@ import re
 import sys
 from pathlib import Path
 from typing import Any
-from _input_binding import finish, VALIDATION
+from _input_binding import finish, classify_validation as classify_evidence
 from _index_io import acquire, release, write_atomic
 
 EXIT_SUCCESS = 0
-
-EVIDENCE_PATTERNS = [
-    (r"\b(npm|pnpm|yarn|bun)\s+(test|run\s+test)\b", "test"),
-    (r"\bpytest\b", "test"),
-    (r"\bcargo\s+test\b", "test"),
-    (r"\bgo\s+test\b", "test"),
-    (r"\b(\./gradlew|mvn)\s+test\b", "test"),
-    (r"\beslint\b", "lint"),
-    (r"\bprettier\s+--check\b", "lint"),
-    (r"\bruff\b", "lint"),
-    (r"\btsc\s+--noEmit\b", "typecheck"),
-    (r"\b(npm|pnpm|yarn|bun)\s+run\s+build\b", "build"),
-    (r"\bcargo\s+build\b", "build"),
-    (r"\bgo\s+build\b", "build"),
-    (r"\bcmake\s+--build\b", "build"),
-]
-
-
 
 def redact(value: str) -> str:
     """F3 (2026-07-29, W35): redact credentials before evidence is versioned."""
@@ -108,13 +90,6 @@ def result_status(tool_response: Any) -> str:
     if exit_code is None:
         return "unknown"
     return "pass" if exit_code == 0 else "fail"
-
-
-def classify_evidence(command: str) -> str | None:
-    for pattern, kind in EVIDENCE_PATTERNS:
-        if re.search(pattern, command):
-            return kind
-    return "test" if VALIDATION.search(command) else None
 
 
 def scalar(value: Any, limit: int) -> str:

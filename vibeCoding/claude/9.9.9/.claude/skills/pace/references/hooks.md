@@ -38,9 +38,9 @@
 
 ## 项目级例外 (用户可调)
 
-v9.9.0 新增旗标: `plan_critique_min_rounds` (0=auto: Refactor/System=2 其余=1) · `skip_impl_subagent_check` (U1 逃生, 纯绿区微改才设) · `skip_runtime_verify` / `skip_architecture_check` (原有)。全部在 `_index.md` frontmatter, delivery-gate 读取。
+9.9.8+ 作者会话不自审：`plan_critique_min_rounds` 默认 0。独立设计挑战走非作者会话的 review-packet。`skip_impl_subagent_check` 仅纯绿区微改。`skip_runtime_verify` / `skip_architecture_check` 仍可用。全部在 `_index.md` frontmatter。
 
 - `_index.skip_polish = true`: 跳过 polish (用户自负责)
 - `_index.skip_architecture_check = true`: 跳过 architecture mtime 检查
 - `_index.plan_critique_disabled = true`: 关闭多轮 critique
-- `_index.plan_critique_max_rounds = N`: 调整最大轮数 (2-6)
+- 不要给 agent 配置 `maxTurns`；不要把固定 critique 轮数写进热路径义务

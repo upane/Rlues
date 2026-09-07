@@ -417,7 +417,12 @@ def ssh_target(config, name):
     if method not in ['key', 'password_env']:
         raise ValueError('unsupported VM authentication method')
     env = os.environ.copy()
-    command = ['ssh', '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=5', '-p', str(port)]
+    alias = target.get('ssh_alias')
+    if alias is not None and (not isinstance(alias, str) or not re.fullmatch(r'[A-Za-z0-9_.-]+', alias) or alias.startswith('-')):
+        raise ValueError('invalid SSH alias')
+    command = ['ssh', '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=5']
+    if alias is None:
+        command += ['-p', str(port)]
     if method == 'password_env':
         variable = auth.get('password_env', '')
         if not variable or variable not in env:
@@ -428,7 +433,7 @@ def ssh_target(config, name):
         command += ['-o', 'BatchMode=yes']
         if auth.get('key_path'):
             command += ['-i', str(Path(auth['key_path']).expanduser())]
-    command += [target['user'] + '@' + target['host']]
+    command += [alias if alias is not None else target['user'] + '@' + target['host']]
     return target, command, env
 
 

@@ -70,34 +70,44 @@ def skip(output: Path, reason: str, packet_sha: str, ranked: list | None = None)
     return 0
 
 
+def token_score(token: str) -> int | None:
+    text = token.strip()
+    if text.isdigit():
+        value = int(text)
+        return value if 1 <= value <= 20 else None
+    if len(text) == 1 and "A" <= text.upper() <= "T":
+        return ord(text.upper()) - ord("A") + 1
+    return None
+
+
 def expected_score(logprobs: dict) -> tuple[float | None, str | None]:
+    """Expected score from logprobs only. Missing alternatives are unscored, not a discrete fallback."""
     content = logprobs.get("content") or []
     blob = "".join(str(item.get("token", "")) for item in content)
     match = SCORE_RE.search(blob)
-    if not match:
+    letter = re.search(r"SCORE\s*=\s*([A-Ta-t])\b", blob)
+    target = match.group(1) if match else (letter.group(1) if letter else None)
+    if not target:
         return None, None
-    target = match.group(1)
     token_blob = ""
     for item in content:
         token_blob += str(item.get("token", ""))
-        if target in token_blob:
-            top = item.get("top_logprobs") or []
-            total = 0.0
-            weighted = 0.0
-            for alt in top:
-                token = str(alt.get("token", "")).strip()
-                if not token.isdigit():
-                    continue
-                value = int(token)
-                if not 1 <= value <= 20:
-                    continue
-                prob = math.exp(float(alt.get("logprob", -99)))
-                weighted += value * prob
-                total += prob
-            if total <= 0:
-                return float(int(target)), target
-            return weighted / total, target
-    return float(int(target)), target
+        if target not in token_blob:
+            continue
+        top = item.get("top_logprobs") or []
+        total = 0.0
+        weighted = 0.0
+        for alt in top:
+            value = token_score(str(alt.get("token", "")))
+            if value is None:
+                continue
+            prob = math.exp(float(alt.get("logprob", -99)))
+            weighted += value * prob
+            total += prob
+        if total <= 0:
+            return None, None
+        return weighted / total, target
+    return None, None
 
 
 def complete(base_url: str, api_key: str, model: str, prompt: str) -> dict:
@@ -170,7 +180,8 @@ def main() -> int:
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, ValueError, OSError):
         return skip(args.output, "backend_error", packet_sha)
 
-    if not saw_logprobs:
+    scored = [row for row in ranked if row["expected_score"] is not None]
+    if not saw_logprobs or not scored:
         return skip(args.output, "logprobs_unavailable", packet_sha, ranked)
 
     ranked.sort(key=lambda row: (-1 if row["expected_score"] is None else -float(row["expected_score"])))

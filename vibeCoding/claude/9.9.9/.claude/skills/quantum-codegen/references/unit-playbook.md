@@ -28,7 +28,7 @@ Convention Pack；需要服务或数据库时只读 `runtime-env`。
 
 1. 定位 Convention Pack。通用约定读 `references/backend-test-convention-pack.md`；若
    `scaffold_id=quantum-backend` 或目标 pack 路径匹配 `quantum-backend/docs/ai/convention-pack`，
-   再读 `references/quantum-backend-adapter.md`。
+   再读 `references/quantum-backend-test-adapter.md`。
 2. 运行 `python3 scripts/check_backend_pack.py <convention-pack-dir> --profile test`，缺必需文件/模板先停机补约定。
 3. 读取 Convention Pack，确定测试类型、目录、fixture 和禁止 mock 的边界。
 4. 为每条验收标准写测试；覆盖成功、失败、权限、空数据和边界条件。
@@ -59,5 +59,5 @@ Convention Pack；需要服务或数据库时只读 `runtime-env`。
 ## References
 
 - `references/backend-test-convention-pack.md`: 后端测试 Convention Pack contract。
-- `references/quantum-backend-adapter.md`: quantum-backend 的测试适配器。
+- `references/quantum-backend-test-adapter.md`: quantum-backend 的测试适配器。
 - `scripts/check_backend_pack.py`: 后端 pack 结构和模板完整性校验脚本。

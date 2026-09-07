@@ -176,6 +176,111 @@ class InputBindingBehavior(unittest.TestCase):
         subprocess.run(['git', '-C', str(self.root), 'add', 'app.py'], check=True)
         subprocess.run(['git', '-C', str(self.root), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'base'], check=True)
 
+    def review_command(self, platform, action, *args):
+        directory, suffix, runner = (CX,'.py',sys.executable) if platform == 'cx' else (CC,'.cjs','node')
+        cli=directory.parent/'skills/pace/scripts'/('review-binding'+suffix)
+        return subprocess.run([runner,str(cli),action,'--cwd',str(self.root),*args],text=True,capture_output=True)
+
+    def prepare_review(self, platform, target):
+        design=(self.sprint/'design.md').read_bytes()
+        (self.sprint/'review-packet.md').write_text('---\nsource_design_sha256: "'+hashlib.sha256(design).hexdigest()+'"\n---\n## Done Contract\n- AC1: returns exact bytes\n')
+        (self.sprint/'evidence.yaml').write_text('collected_evidence: []\n')
+        run=self.review_command(platform,'prepare')
+        self.assertEqual(run.returncode,0,run.stderr)
+        prepared=json.loads(run.stdout)
+        dispatch=self.sprint/'dispatch.json'
+        dispatch.write_text(json.dumps({'task_name':target}))
+        run=self.review_command(platform,'bind','--run',prepared['review_run_id'],'--receipt',str(dispatch))
+        self.assertEqual(run.returncode,0,run.stderr)
+        return prepared
+
+    def test_review_rejects_conflicting_native_frontmatter_without_scanning_body(self):
+        for platform in ('cx','cc'):
+            receipt=self.sprint/'result.json'
+            for key in ('mode','review_run_id','packet_sha256','input_manifest_sha256','reviewed_packet_sha256','reviewed_diff_sha256'):
+                target='/root/metadata-'+platform+'-'+key
+                prepared=self.prepare_review(platform,target)
+                with self.subTest(platform=platform,key=key):
+                    bad='design' if key=='mode' else 'wrong-run' if key=='review_run_id' else '0'*64
+                    output='---\n'+key+': '+json.dumps(bad)+'\nverdict: PASS\n---\nVERDICT: PASS\n'
+                    receipt.write_text(json.dumps({'agents':[{'agent_name':target,'agent_status':{'completed':output}}]}))
+                    run=self.review_command(platform,'accept','--run',prepared['review_run_id'],'--receipt',str(receipt))
+                    self.assertEqual(run.returncode,2,run.stdout)
+                    self.assertIn('native review metadata',run.stderr)
+                run=self.review_command(platform,'supersede','--run',prepared['review_run_id'])
+                self.assertEqual(run.returncode,0,run.stderr)
+            # A quoted example in the body is not a declaration by this review.
+            target='/root/metadata-'+platform+'-valid'
+            prepared=self.prepare_review(platform,target)
+            expected={key:prepared[key] for key in ('mode','review_run_id','packet_sha256','input_manifest_sha256')}
+            expected.update(reviewed_packet_sha256=prepared['packet_sha256'],reviewed_diff_sha256=py_module('delivery-gate').source_diff_sha256(self.root))
+            output='---\n'+''.join(k+': '+json.dumps(v)+'\n' for k,v in expected.items())+'verdict: PASS\n---\n## Rejected example\n\n```yaml\nmode: design\nreview_run_id: wrong-run\nreviewed_packet_sha256: wrong-packet\n```\n\nVERDICT: PASS\n'
+            receipt.write_text(json.dumps({'agents':[{'agent_name':target,'agent_status':{'completed':output}}]}))
+            run=self.review_command(platform,'accept','--run',prepared['review_run_id'],'--receipt',str(receipt))
+            self.assertEqual(run.returncode,0,run.stderr)
+            py_module('delivery-gate').validate_review(self.sprint/'reviews/implementation-review.md',self.root,self.sprint)
+
+    def test_final_validation_rechecks_legacy_native_metadata(self):
+        target='/root/legacy-accepted'
+        prepared=self.prepare_review('cx',target)
+        receipt=self.sprint/'result.json'
+        receipt.write_text(json.dumps({'task_name':target,'status':'completed','output':'VERDICT: PASS\n'}))
+        run=self.review_command('cx','accept','--run',prepared['review_run_id'],'--receipt',str(receipt))
+        self.assertEqual(run.returncode,0,run.stderr)
+        accepted=json.loads(run.stdout)
+        # Model an old accepted artifact whose hashes are internally consistent,
+        # but whose original native declaration contradicts its dispatch.
+        native=self.sprint/accepted['native_output_ref']
+        raw=json.loads(native.read_text())
+        raw['output']='---\nmode: design\nverdict: PASS\n---\nVERDICT: PASS\n'
+        native.write_text(json.dumps(raw))
+        log=self.sprint/'session-log.md'
+        log.write_text(log.read_text().replace(accepted['native_output_sha256'],hashlib.sha256(native.read_bytes()).hexdigest()))
+        gate=py_module('delivery-gate')
+        with self.assertRaisesRegex(gate.GateError,'native review metadata'):
+            gate.validate_review(self.sprint/'reviews/implementation-review.md',self.root,self.sprint)
+        code='require(process.argv[1]).validateReview(process.argv[2],process.argv[3],process.argv[4]);'
+        run=subprocess.run(['node','-e',code,str(CC/'delivery-gate.cjs'),str(self.sprint/'reviews/implementation-review.md'),str(self.root),str(self.sprint)],text=True,capture_output=True)
+        self.assertNotEqual(run.returncode,0)
+        self.assertIn('native review metadata',run.stderr)
+
+    def test_native_metadata_distinguishes_indented_root_from_nested_fields(self):
+        for platform in ('cx','cc'):
+            target='/root/indented-'+platform
+            prepared=self.prepare_review(platform,target)
+            receipt=self.sprint/'result.json'
+            receipt.write_text(json.dumps({'task_name':target,'status':'completed','output':'---\n  mode: design\n  verdict: PASS\n---\nVERDICT: PASS\n'}))
+            with self.subTest(platform=platform):
+                run=self.review_command(platform,'accept','--run',prepared['review_run_id'],'--receipt',str(receipt))
+                self.assertEqual(run.returncode,2,run.stdout)
+                self.assertIn('native review metadata',run.stderr)
+            self.review_command(platform,'supersede','--run',prepared['review_run_id'])
+            target='/root/nested-'+platform
+            prepared=self.prepare_review(platform,target)
+            output='---\nmode: implementation\ndimensions:\n  mode: design\nverdict: CONCERNS\n---\nVERDICT: CONCERNS\n'
+            receipt.write_text(json.dumps({'task_name':target,'status':'completed','output':output}))
+            run=self.review_command(platform,'accept','--run',prepared['review_run_id'],'--receipt',str(receipt))
+            self.assertEqual(run.returncode,0,run.stderr)
+            self.assertEqual(json.loads(run.stdout)['event'],'received')
+
+    def test_gradle_maven_and_supported_validation_commands_pair_pre_post(self):
+        commands=('./gradlew test','./gradlew build','mvn compile','mvn verify','prettier --check .','cmake --build build','npm run lint','python3 -m unittest','go vet ./...','cargo clippy')
+        for platform,directory,suffix,runner in [('cx',CX,'.py',sys.executable),('cc',CC,'.cjs','node')]:
+            for number,command in enumerate(commands):
+                with self.subTest(platform=platform,command=command):
+                    ident=platform+'-paired-'+str(number)
+                    payload={'cwd':str(self.root),'tool_use_id':ident,'tool_name':'Bash','hook_event_name':'PreToolUse','tool_input':{'command':command}}
+                    run=subprocess.run([runner,str(directory/('pre-bash-guard'+suffix))],input=json.dumps(payload),text=True,capture_output=True)
+                    self.assertEqual(run.returncode,0,run.stderr)
+                    payload.update(hook_event_name='PostToolUse',tool_response={'exit_code':0,'stdout':'validated'})
+                    run=subprocess.run([runner,str(directory/('evidence-collector'+suffix))],input=json.dumps(payload),text=True,capture_output=True)
+                    self.assertEqual(run.returncode,0,run.stderr)
+                    evidence=self.sprint/'evidence.yaml'
+                    records=py_module('delivery-gate').parse_evidence_records(evidence) if evidence.exists() else []
+                    matching=[r for r in records if r['tool_use_id']==ident]
+                    self.assertEqual(len(matching),1,platform+': '+command)
+                    self.assertEqual(matching[0]['binding_status'],'current',platform+': '+command)
+
     def test_binding_ignores_log_writes_but_rejects_code_contract_environment_drift(self):
         binding = py_module('_input_binding')
         original = binding.snapshot(self.root, self.sprint)

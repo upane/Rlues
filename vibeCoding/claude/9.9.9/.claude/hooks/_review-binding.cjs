@@ -2,6 +2,41 @@
 // One native review/receipt binding in session-log.md; no second task state store.
 const fs = require('fs'), path = require('path'), crypto = require('crypto');
 const input = require('./_input-binding.cjs'), io = require('./_index-io.cjs');
+const NATIVE_BINDINGS = {review_run_id:'review_run_id',mode:'mode',base_commit:'base_commit',packet_sha256:'packet_sha256',
+  reviewed_packet_sha256:'packet_sha256',input_manifest_sha256:'input_manifest_sha256',reviewed_diff_sha256:'reviewed_diff_sha256'};
+function validateNativeMetadata(output,prepared,root) {
+  // Inspect only opening frontmatter, never examples or references in the body.
+  const lines=output.replace(/^[\ufeff\r\n]+/,'').split(/\r?\n/);
+  if (!lines.length || lines[0].trim()!=='---') return;
+  const end=lines.findIndex((line,i)=>i>0 && line.trim()==='---');
+  if (end<0) throw new Error('native review metadata frontmatter is not closed');
+  const seen=new Set();
+  const mappings=lines.slice(1,end).map(line=>line.match(/^([ \t]*)([A-Za-z0-9_.-]+)[ \t]*:[ \t]*(.*)$/)).filter(Boolean);
+  const rootIndent=Math.min(...mappings.map(match=>match[1].length));
+  for (const match of mappings) {
+    if (match[1].length!==rootIndent || !Object.hasOwn(NATIVE_BINDINGS,match[2])) continue;
+    const key=match[2],raw=match[3].trim();
+    if (seen.has(key)) throw new Error('native review metadata duplicate field: '+key);
+    seen.add(key);
+    let value;
+    if (raw.startsWith('"')) {
+      const quoted=raw.match(/^("(?:\\.|[^"\\])*")[ \t]*(?:#.*)?$/);
+      if (!quoted) throw new Error('native review metadata invalid scalar: '+key);
+      value=JSON.parse(quoted[1]);
+    } else if (raw.startsWith("'")) {
+      const quoted=raw.match(/^'((?:''|[^'])*)'[ \t]*(?:#.*)?$/);
+      if (!quoted) throw new Error('native review metadata invalid scalar: '+key);
+      value=quoted[1].replaceAll("''", "'");
+    } else {
+      value=raw.split(' #',1)[0].trim();
+      if (!value || value.startsWith('#') || value.toLowerCase()==='null' || value==='~') continue;
+    }
+    if (value==='') continue;
+    let expected=prepared[NATIVE_BINDINGS[key]];
+    if (key==='reviewed_diff_sha256') expected=prepared.mode==='implementation' ? require('./delivery-gate.cjs').sourceDiffSha256(root) : null;
+    if (typeof value!=='string' || !expected || value!==expected) throw new Error('native review metadata mismatch: '+key);
+  }
+}
 function events(sprint) {
   const log = path.join(sprint,'session-log.md');
   return fs.existsSync(log) ? [...fs.readFileSync(log,'utf8').matchAll(/^<!-- athena-review:(.*?) -->$/gm)].map(m=>JSON.parse(m[1])) : [];
@@ -103,6 +138,7 @@ function accept(cwd,run,receipt) {
   const [target,status,output] = nativeReceipt(receipt,bound[0].reviewer_target);
   if (target!==bound[0].reviewer_target || !['completed','complete','succeeded'].includes(status) || !output.trim()) throw new Error('wrong target, unknown/incomplete native result, or missing output');
   assertLive(root,sprint,prepared);
+  validateNativeMetadata(output,prepared,root);
   const verdicts = [...output.matchAll(/^\s*(?:VERDICT|verdict)\s*:\s*["']?(PASS|REWORK|FAIL|CONCERNS)\b/gm)];
   if (!verdicts.length) throw new Error('native result has no explicit verdict');
   const verdict=verdicts.at(-1)[1];
@@ -131,8 +167,9 @@ function validateCurrent(root,sprint,review) {
   for (const [ref,sha] of [[bound[0].dispatch_receipt_ref,bound[0].dispatch_receipt_sha256],[row.native_output_ref,row.native_output_sha256]]) {
     if (input.digest(fs.readFileSync(path.join(sprint,ref)))!==sha) throw new Error('native receipt changed/missing');
   }
-  const [target,status] = nativeReceipt(path.join(sprint,row.native_output_ref),bound[0].reviewer_target);
+  const [target,status,output] = nativeReceipt(path.join(sprint,row.native_output_ref),bound[0].reviewer_target);
   if (target!==bound[0].reviewer_target || target!==row.reviewer_target || !['completed','complete','succeeded'].includes(status)) throw new Error('native result identity/status mismatch');
+  validateNativeMetadata(output,prepared,root);
 }
 function main(argv=process.argv.slice(2)) {
   if (argv.includes('--help') || !argv.length) {

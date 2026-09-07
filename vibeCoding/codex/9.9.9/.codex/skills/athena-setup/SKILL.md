@@ -11,8 +11,8 @@ disable-model-invocation: true
 ```bash
 # 从未安装的机器：用仓库里的安装器，不要假设 ~/.agents/skills 已存在。
 python3 vibeCoding/codex/9.9.9/.codex/skills/athena-setup/scripts/setup-athena.py --help
-python3 vibeCoding/codex/9.9.9/.codex/skills/athena-setup/scripts/setup-athena.py --repo-root "$PWD" --only cc --dry-run
-python3 vibeCoding/codex/9.9.9/.codex/skills/athena-setup/scripts/setup-athena.py --repo-root "$PWD" --only cc
+python3 vibeCoding/codex/9.9.9/.codex/skills/athena-setup/scripts/setup-athena.py --repo-root "$PWD" --only cx --dry-run
+python3 vibeCoding/codex/9.9.9/.codex/skills/athena-setup/scripts/setup-athena.py --repo-root "$PWD" --only cx
 ```
 
 外部包用 `--cc-package` / `--cx-package`。`--home` 用于隔离 fixture，不修改未选平台。

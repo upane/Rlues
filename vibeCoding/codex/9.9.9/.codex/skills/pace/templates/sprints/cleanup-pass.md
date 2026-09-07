@@ -31,16 +31,16 @@ polish_worker: ""              # 谁做的: 主 agent | polish_worker subagent
 - 检查 YAGNI 违反: 未来才用的抽象 / 没必要的接口
 - 行动: [简化列表]
 
-## Finishing-a-development-branch (借 Superpowers)
+## Finishing-a-development-branch
 
-完成后必须:
+polish 在独立 review 之前。本阶段只跑受影响测试并留下 worktree。
 - [ ] 跑测试验证 (`npm test` / `pytest` / ...)
-- [ ] 提示用户选: merge | 创 PR | 继续工作 | 丢弃
-- [ ] 清理 worktree (`git worktree remove ...`)
+- [ ] **不要** merge / 开 PR / `git worktree remove`
+- [ ] 下一动作是一次独立 review，不是 ship
 
 ## review 意见合并
 
-[本 sprint review_pass1.md 的 P1/P2 findings 在 polish 阶段一并处理. 列出已处理项]
+polish 不读取 implementation-review 作为前置。本段只记本轮清理中发现并处理的问题。
 
 - F1 (P1): [reviewer 提的问题] → ✅ 已处理
 - F2 (P2): ... → ✅ 已处理
@@ -56,5 +56,5 @@ polish_worker: ""              # 谁做的: 主 agent | polish_worker subagent
 
 ## VERDICT
 
-- ✅ Pass: 全部 5 检查项通过 + finishing 完成
+- ✅ Pass: 全部 5 检查项通过；测试绿；worktree 仍在，交给 review
 - ⚠️ Concerns: 部分项推后 (列出原因)

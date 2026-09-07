@@ -54,7 +54,7 @@ Convention Pack 或 `runtime-env`，不复制 Playwright 官方细节。
 ## PACE 集成
 
 - runtime-verify stage：启动全栈环境，执行 E2E，保存证据。
-- review stage：spec-compliance 核对 E2E 是否覆盖原始需求和契约。
+- review stage：一次独立 review 核对 E2E 是否覆盖原始需求和契约。
 - ship stage：交付报告引用 E2E 结果和人工未确认项。
 
 ## References

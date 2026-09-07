@@ -5,7 +5,15 @@ const {execFileSync} = require('child_process');
 const {writeAtomic} = require('./_index-io.cjs');
 const FIELDS = ['source_sha256', 'design_sha256', 'environment_sha256'];
 const PUBLIC_ENV = new Set(['system','release','machine','os','arch','image','runtime','version','scenario','seed','recipe','required']);
-const VALIDATION = /\b(?:pytest|unittest|(?:npm|pnpm|yarn|bun)\s+(?:test|run\s+(?:test|build|lint|typecheck|check))|cargo\s+(?:test|build|check|clippy)|go\s+(?:test|build|vet)|mvn\s+(?:test|verify)|(?:eslint|ruff|tsc)\b|node\s+--check|git\s+diff\s+--check)\b/;
+const COMMAND_PREFIX = String.raw`(?:^|[;&|]\s*)\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*(?:npx\s+)?`;
+const VALIDATION_PATTERNS = [
+  ['test',String.raw`(?:python3?\s+-m\s+(?:pytest|unittest)|pytest|unittest|(?:npm|pnpm|yarn|bun)\s+(?:test|run\s+test)|cargo\s+test|go\s+test|mvn\s+(?:test|verify)|\./gradlew\s+test)`],
+  ['lint',String.raw`(?:eslint|prettier\s+--check|ruff|(?:npm|pnpm|yarn|bun)\s+run\s+lint|cargo\s+clippy|go\s+vet|node\s+--check|git\s+diff\s+--check)`],
+  ['typecheck',String.raw`(?:tsc|(?:npm|pnpm|yarn|bun)\s+run\s+(?:typecheck|check)|cargo\s+check)`],
+  ['build',String.raw`(?:(?:npm|pnpm|yarn|bun)\s+run\s+build|cargo\s+build|go\s+build|mvn\s+compile|\./gradlew\s+build|cmake\s+--build)`],
+].map(([kind,pattern])=>[kind,new RegExp(COMMAND_PREFIX+pattern+'\\b','im')]);
+// One native classifier for both pre and post; no collector-side pattern copy.
+function classifyValidation(command) { return VALIDATION_PATTERNS.find(([,pattern])=>pattern.test(command))?.[0] || null; }
 function canonical(value) {
   if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
   if (value && typeof value === 'object') return '{' + Object.keys(value).sort().map(k=>JSON.stringify(k)+':'+canonical(value[k])).join(',') + '}';
@@ -72,7 +80,7 @@ function prePath(root,payload) {
   return path.join(root,'.ai_state/.runtime/evidence-inputs',digest(payload.tool_use_id)+'.json');
 }
 function captureBefore(payload) {
-  if (!VALIDATION.test(commandOf(payload))) return;
+  if (!classifyValidation(commandOf(payload))) return;
   if (/(?:^|[;&|]\s*)cd\s/.test(commandOf(payload))) throw new Error('use the tool workdir for validation; shell directory changes are not bound');
   const [root,sprint] = context(executionCwd(payload)), file = prePath(root,payload);
   fs.mkdirSync(path.dirname(file),{recursive:true});
@@ -97,4 +105,4 @@ function currentRecord(record,root,sprint,live) {
     return FIELDS.every(k=>record[k]===current[k]) && digest(fs.readFileSync(output))===record.artifact_sha256;
   } catch (_) { return false; }
 }
-module.exports = {FIELDS,VALIDATION,required,canonical,digest,git,context,sourceSha256,environment,snapshot,captureBefore,finish,currentRecord};
+module.exports = {FIELDS,classifyValidation,required,canonical,digest,git,context,sourceSha256,environment,snapshot,captureBefore,finish,currentRecord};
